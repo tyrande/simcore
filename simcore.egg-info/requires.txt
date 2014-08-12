@@ -1,3 +1,0 @@
-twisted
-apns
-msgpack-python
