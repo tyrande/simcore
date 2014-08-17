@@ -4,6 +4,7 @@
 # Contact: alan@sinosims.com
 
 from simcore.core.database import Srdb
+from simcore.core.gol import raiseCode
 import uuid, time
 
 class RedisHash(dict):
@@ -32,7 +33,7 @@ class RedisHash(dict):
 
     def reload(self):
         d = self._redis.hgetall("%s:%s:info"%(self.__class__.__name__, self.id))
-        d.addCallback(lambda hash: self.update(hash))
+        d.addCallback(lambda hs: self.update(hs))
         d.addCallback(lambda x: self)
         return d
 
@@ -44,7 +45,7 @@ class RedisHash(dict):
     @classmethod
     def findById(self, id):
         d = self._redis.hgetall("%s:%s:info"%(self.__name__, id))
-        d.addCallback(lambda hash: self(id, hash))
+        d.addCallback(lambda hs: self(id, hs) if len(hs) > 0 else None)
         return d
 
     @classmethod
@@ -98,7 +99,7 @@ class User(RedisHash):
     #   @key atk:  str          Apple push Token
 
     def addNewsSession(self, sid):
-        d = self._redis.zadd("User:%s:news"%self.id, time.time(), sid)
+        d = self._redis.zadd("User:%s:news"%self.id, int(time.time()), sid)
         d.addCallback(lambda x: self)
         return d
 
@@ -111,40 +112,77 @@ class User(RedisHash):
         return d
 
     def addBox(self, bid):
-        pass
+        addScript = """
+            redis.call('zadd', 'User:'..KEYS[1]..':'..'Boxes', KEYS[3], KEYS[2])
+            redis.call('zadd', 'Box:'..KEYS[2]..':'..'Users', KEYS[3], KEYS[1])
+        """
+        return self._redis.eval(addScript, [self.id, bid, int(time.time())])
 
     def boxes(self):
-        pass
+        return Box.findAllByKey("User:%s:Boxes"%self.id)
 
     def delBox(self, bid):
-        pass
+        delScript = """
+            redis.call('zrem', 'User:'..KEYS[1]..':'..'Boxes', KEYS[2])
+            redis.call('zrem', 'Box:'..KEYS[2]..':'..'Users', KEYS[1])
+        """
+        return self._redis.eval(delScript, [self.id, bid])
 
     def chips(self):
-        # return Chip.findAllByKey("User:%s:list:Chip"%self.id)
-        d = self._redis.zrange("U:%s:list:C"%self.id, 0, -1)
-        d.addCallback(lambda cids: Chip.findAllByIds(['460025125862622']))
+        findScript = """
+            local c = {}
+            local cs  = {}
+            local bs = redis.call('zrange', 'User:'..KEYS[1]..':Boxes', 0, -1)
+            for k, v in pairs(bs) do
+                cs = redis.call('zrange', 'Box:'..v..':Chips', 0, -1)
+                for p, q in pairs(cs) do
+                    c[p] = {q,redis.call('hgetall', 'Chip:'..q..':info')}
+                end
+            end
+            return c
+        """
+        # d = self.boxes()
+        # d.addCallback(lambda bs: [ {b.id : b.chips()} for b in bs ])
+        d = self._redis.eval(findScript, [self.id])
+        d.addCallback(lambda infos: [ Chip(i[0], dict(zip(i[1][::2], i[1][1::2]))) for i in infos ])
         return d
+        # return Chip.findAllByKey("User:%s:Chips"%self.id)
+        # d = self._redis.zrange("U:%s:list:C"%self.id, 0, -1)
+        # d.addCallback(lambda cids: Chip.findAllByIds(['460025125862622']))
+        # return d
 
     def chip(self, cpid):
-        return Chip('460025125862622').reload()
+        findScript = """
+            local bid = redis.call('hget', 'Chip:'..KEYS[1]..':info', 'bid')
+            local sc = redis.call('zscore', 'User:'..KEYS[2]..':Boxes', bid)
+            local cp = {}
+            if tonumber(sc) > 0 then
+                cp = redis.call('hgetall', 'Chip:'..KEYS[1]..':info')
+            end
+            return cp
+        """
+        d = self._redis.eval(findScript, [cpid, self.id])
+        d.addCallback(lambda hs: dict(zip(hs[::2], hs[1::2])))
+        d.addCallback(lambda hs: Chip(cpid, hs) if len(hs) > 0 else raiseCode(603))
+        return d
 
     def addCard(self, cdid):
-        pass
+        return self._redis.zadd("User:%s:Cards"%self.id, int(time.time()), cdid)
 
     def cards(self):
-        return []
+        return Cards.findAllByKey("User:%s:Cards"%self.id)
 
     def delCard(self, cdid):
-        pass
+        return self._redis.zrem("User:%s:Cards"%self.id, cdid)
 
 class Chip(RedisHash):
     # Chip Model inherit from RedisHash
     #   Chip can be plug into Boxes
     #   @key id:        str     IMEI of the Chip, unique in whole system
-    #   @key typ:       str     Type of the Chip
-    #                               'GSM'   Insert GSM SIM Card
-    #                               'CDMA'  Insert CDMA SIM Card
-    #                               'PSTN'  Plugin PSTN Line
+    #   @key mod:       str     Type of the Chip
+    #                               'MG2639'   Insert GSM SIM Card
+    #                               'MC8332'  Insert CDMA SIM Card
+    #                               'SI3050'  Plugin PSTN Line
     #   @key cdid:      str     ID of the Card in the Chip, None if chip type is PSTN
     #   @key bid:       str     ID of the Box which the Chip plug in
     #
@@ -176,15 +214,11 @@ class Chip(RedisHash):
         return d
 
     def users(self):
-        # return User.findAllByKey("Chip:%s:list:User"%self.id)
-        d = self._redis.zrange("C:%s:list:U"%self.id, 0, -1)
-        d.addCallback(lambda uids: User.findAllByIds(['0f9c509afcd711e383b700163e0212e4']))
-        d.addCallback(lambda s: self.pp(s))
-        return d
-
-    def pp(self, s):
-        print repr(s)
-        return s
+        return Box(self['bid']).users()
+        # d = self._redis.zrange("C:%s:list:U"%self.id, 0, -1)
+        # d.addCallback(lambda uids: User.findAllByIds(['0f9c509afcd711e383b700163e0212e4']))
+        # d.addCallback(lambda s: self.pp(s))
+        # return d
 
     def call(self):
         pass
@@ -195,8 +229,17 @@ class Box(RedisHash):
     #   @key set:       int     The Box is in the setting mode or not, 0 means not in setting mode, 1 means in
     #   @key onl:       int     Box is online or not, 0 means not online, 1 means online
 
+    def users(self):
+        return User.findAllByKey("Box:%s:Users"%self.id)
+
+    def addChip(self, cpid):
+        return self._redis.zadd("Box:%s:Chips"%self.id, int(time.time()), cpid)
+
     def chips(self):
-        return []
+        return Chip.findAllByKey("Box:%s:Chips"%self.id)
+
+    def delChip(self, cpid):
+        return self._redis.zrem("Box:%s:Chips"%self.id, cpid)
 
 class Card(RedisHash):
     # SIM Card Model inherit from RedisHash

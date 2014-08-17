@@ -17,7 +17,7 @@ class PhoneNoti(SHProtocol):
         d.addCallback(lambda x: self._mo.addNewsSession(self._session.id))
         d.addCallback(lambda x: self._mo.chips())
         d.addCallback(lambda cps: Call.findAllByIds([ c.get('cll', '') for c in cps]))
-        d.addCallback(lambda cs: self.returnDPack(200, [{'cid' : c['cpid'], 'oth' : c['oth'], 'seq' : c['id'], 'tim' : v['st']} for c in cs if (c.get('uid', '') == 'None' and time.time() - v['st'] < 60) ], tpack.id))
+        d.addCallback(lambda cs: self.returnDPack(200, [{'cid' : c['cpid'], 'oth' : c['oth'], 'seq' : c['id'], 'tim' : int(c.get('st', 0))} for c in cs if (c.get('uid', '') == '' and time.time() - int(c.get('st', 0)) < 60) ], tpack.id))
         return d
 
     @routeCode(402)

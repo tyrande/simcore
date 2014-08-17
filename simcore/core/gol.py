@@ -5,6 +5,9 @@
 
 import random
 
+def raiseCode(code):
+    raise Exception(code)
+
 class Gol(object):
     # Gol is the global Singlone Class maintain global resource
     # @attr env:            Twisted running envirement (test, dev, production)

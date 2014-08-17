@@ -256,15 +256,10 @@ class SHProtocol(protocol.Protocol):
         #                  2. When push through socket fail, use the Apple way
 
         d = u.newsSessions()
-        d.addCallback(lambda ses: self.pp(ses))
         d.addCallback(lambda ses: [ self.passToSck(s['chn'], s.id + 'news', '', 0x00, rc, body) for s in ses ])
         if u.get('rol', None) == '20' and u.get('atk', None):
             d.addCallback(lambda x: self.sendNotiToApple(u['atk'], 'Calling...'))
         return d
-
-    def pp(self, s):
-        print '---ses--', repr(s)
-        return s
 
     def sendNotiToApple(self, pushTok, note):
         payload = Payload(alert=note, sound="default", badge=1)
