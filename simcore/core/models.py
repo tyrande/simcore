@@ -84,10 +84,11 @@ class Session(RedisHash):
     #   @key imei: str      Device id, IMEI of Card, IMEI of Box or UDID of Phone
     #   @key chn:  str      Server Channel name
     #   
-    #   @key bid:  str      Box id (only for Card and Box)
-    #   @key cid:  str      Card id (only for Card)
+    #   @key Box:  str      Box id (only for BoxMo)
+    #   @key Chip: str      Chip id (only for ChipMo)
+    #   @key bid:  str      Box id (only for ChipMo and BoxMo)
     #
-    #   @key uid:  str      User id (only for Phone)
+    #   @key User: str      User id (only for PhoneMo and PhoneNotiMo)
     #   @key ts:   int      Created at, int(time.time())
     
     _infoTX = 604800
@@ -210,6 +211,7 @@ class Chip(RedisHash):
         cl = Call(clid)
         d = cl.save({ 'stt' : 0, 'ed' : int(time.time()) })
         d.addCallback(lambda c: self.save({ 'cll' : '' }))
+        d.addCallback(lambda c: self._redis.rpush('System:Calls', cl.id))
         d.addCallback(lambda x: cl)
         return d
 
