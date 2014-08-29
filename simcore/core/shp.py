@@ -87,7 +87,7 @@ class PPack(object):
         return msgpack.packb([self.receiverSckId, self.senderId, self.senderCls, self.senderChannel, self.senderSid, self.packId, self.flag, self.apiRet, self.body])
 
     def __repr__(self):
-        return repr([self.receiverSckId, self.senderId, self.senderCls, self.senderChannel, self.senderSid, self.packId, self.flag, self.apiRet, self.body])
+        return repr({'receiverSckId' : self.receiverSckId, 'sendId' : self.senderId, 'senderCls' : self.senderCls, 'senderChannel' : self.senderChannel, 'senderSid' :  self.senderSid, 'packId' : self.packId, 'flag' : self.flag, 'apiRet' : self.apiRet, 'body' : self.body})
 
     @classmethod
     def loads(self, str):
@@ -97,7 +97,7 @@ def routeCode(code):
     # Decorator for route code and route api
     
     def decorator(callback):
-        Gol().addRoute(code, callback)
+        Gol().addRoute(callback.__module__.replace('simcore.servers.', ''), code, callback)
         return callback
     return decorator
 
@@ -115,7 +115,7 @@ class SHProtocol(protocol.Protocol):
 
     def connectionMade(self):
         # -*- Debug -*-
-        Gol()._logPack_('CM', self, None, '>> %s'%self.__class__.__name__)
+        Gol()._log_('CM', self, None, '>> %s'%self.__class__.__name__)
 
         self._recvBuf = ''
         self._pckId = 1000 + random.randint(0, 5000)
@@ -124,10 +124,10 @@ class SHProtocol(protocol.Protocol):
         self._TPackWaitPeer = {}
 
     def connectionLost(self, reason):
-        if self._session: Gol().delSck(self._session.id, self.factory._sckType)
-
         # -*- Debug -*-
-        Gol()._logPack_('CL', self, None, '<< %s'%self.__class__.__name__)
+        Gol()._log_('CL', self, None, '<< %s'%self.__class__.__name__)
+        return Gol().delSck(self._session.id, self.factory._sckType) if self._session else defer.Deferred()
+        
 
     def dataReceived(self, data):
         self._recvBuf += data
@@ -142,12 +142,11 @@ class SHProtocol(protocol.Protocol):
             else: self.errorRoutePack(500, pack)
         
         # -*- Debug -*-
-        Gol()._logPack_('FR', self, pack)
-
+        Gol()._log_('FR', self, pack)
         d = defer.Deferred()
         d.addCallback(self.loadSession)
         d.addCallback(self.loadMo)
-        d.addCallback(lambda x: Gol().route(pack.routeCode)(self, pack))
+        d.addCallback(lambda x: Gol().route(self.__class__.__name__, pack.routeCode)(self, pack))
         d.addCallbacks(self.finishRoutePack, lambda x: self.errorRoutePack(x, pack))
         d.callback(pack)
 
@@ -158,7 +157,7 @@ class SHProtocol(protocol.Protocol):
         #   @param senderChannel:   Sender socket factory channel
         
         # -*- Debug -*-
-        # Gol()._logPack_('PP', self, None, "[%s %s %s:%s:%s RC %s:%s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, senderChannel, senderCls, senderId, pack.routeCode))
+        # Gol()._log_('PP', self, None, "[%s %s %s:%s:%s RC %s:%s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, senderChannel, senderCls, senderId, pack.routeCode))
 
         if ppack.flag == 0x00:
             pack = TPack(self.newPackId(), ppack.apiRet, self._session.id, ppack.body)
@@ -216,7 +215,7 @@ class SHProtocol(protocol.Protocol):
 
     def send(self, pack):
         # -*- Debug -*-
-        Gol()._logPack_('TO', self, pack)
+        Gol()._log_('TO', self, pack)
 
         self.transport.write(pack.dump())
         return pack
@@ -236,7 +235,7 @@ class SHProtocol(protocol.Protocol):
 
     def passToSck(self, channel, SckId, packId, flag, apiRet, body):
         # -*- Debug -*-
-        # Simhub()._logPack_('PT', self, None, "[%s %s %s:%s:%s To %s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, channel, sid, pack.routeCode))
+        # Simhub()._log_('PT', self, None, "[%s %s %s:%s:%s To %s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, channel, sid, pack.routeCode))
 
         ppack = PPack([SckId, self._mo.id, self._mo.__class__.__name__, self.factory.channel, self._session.id, packId, flag, apiRet, body])
         if channel == self.factory.channel and False:
@@ -269,9 +268,12 @@ class SHProtocol(protocol.Protocol):
         pass
 
     def errorRoutePack(self, failure, tpack):
-        raise failure
-        print 'error Route', failure
-        self.returnDPack(int(failure.getErrorMessage()), None)
+        if Gol().env == 'test':
+            raise failure
+        try:
+            self.returnDPack(int(failure.getErrorMessage()), None, tpack.id)
+        except Exception, e:
+            Gol()._log_('ER', self, None, repr(failure.getBriefTraceback().replace('\n', ' ')))
 
     def addTPackWaiting(self, pack):
         self._TPackWaitPeer[pack.id] = pack

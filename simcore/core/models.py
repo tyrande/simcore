@@ -37,6 +37,10 @@ class RedisHash(dict):
         d.addCallback(lambda x: self)
         return d
 
+    def expire(self, tt=None):
+        if tt: tt = self._infoTX
+        return self._redis.expire("%s:%s:info"%(self.__class__.__name__, self.id), tt)
+
     @classmethod
     def create(self, info={}):
         s = self(uuid.uuid1().hex)
@@ -96,8 +100,11 @@ class Session(RedisHash):
 class User(RedisHash):
     # User Model inherit from RedisHash
     #   User has many Boxes, user can control the chips in Box only if the Box pair to User
-    #   @key id:                uuid.uuid1() generated, unique in whole system
-    #   @key atk:  str          Apple push Token
+    #   @key id:            uuid.uuid1() generated, unique in whole system
+    #   @key atk:  str      Apple push Token
+    #   @key rol:  str      Current device Role
+    #                           '20' -> 0x20  phone iOS
+    #                           '21' -> 0x21  phone Android
 
     def addNewsSession(self, sid):
         d = self._redis.zadd("User:%s:news"%self.id, int(time.time()), sid)
@@ -157,7 +164,7 @@ class User(RedisHash):
             local bid = redis.call('hget', 'Chip:'..KEYS[1]..':info', 'bid')
             local sc = redis.call('zscore', 'User:'..KEYS[2]..':Boxes', bid)
             local cp = {}
-            if tonumber(sc) > 0 then
+            if sc ~= nil then
                 cp = redis.call('hgetall', 'Chip:'..KEYS[1]..':info')
             end
             return cp

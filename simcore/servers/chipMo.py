@@ -23,7 +23,6 @@ class ChipMo(SHProtocol):
     @routeCode(101)
     def doAuth(self, tpack):
         # -*- TODO -*- : Use RSA encrypt package body
-
         d = self._session.save({ 'bid' : tpack.body[1], 'rol' :  '10' })
         d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
         return d
@@ -32,9 +31,9 @@ class ChipMo(SHProtocol):
     def doLogin(self, tpack):
         # -*- TODO -*- : Use RSA encrypt package body
 
-        (mod, imsi, imei, bid) = tpack.body[0].split('\n')
+        (mod, imei, imsi, bid) = tpack.body[0].split('\n')
         c = self.setMo(Chip(imei))
-        d = c.save({ 'cid' : c.id, 'imei' : imei, 'bid' : bid, 'sid' : self._session.id, 'chn' : self.factory.channel, 'mod' : mod })
+        d = c.save({ 'cdid' : imsi, 'bid' : bid, 'sid' : self._session.id, 'chn' : self.factory.channel, 'mod' : mod })
         d.addCallback(lambda c: Box(bid).addChip(c.id))
         d.addCallback(lambda x: self._session.update({ self._moClass.__name__ : c.id }))
         d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
@@ -60,7 +59,8 @@ class ChipMo(SHProtocol):
         if dpack._TPack.body[1] == 1:
             d.addCallback(lambda u: self._mo.startCall(dpack._TPack.body[2], u.id, dpack._TPack.body[6], 0))
         elif dpack._TPack.body[1] == 2:
-            d.addCallback(lambda u: self._mo.endCall(dpack._TPack.body[2]))
+            # d.addCallback(lambda u: self._mo.endCall(dpack._TPack.body[2]))
+            pass
         elif dpack._TPack.body[1] == 3:
             d.addCallback(lambda u: self._mo.answerCall(dpack._TPack.body[2], u.id))
         else:
@@ -107,7 +107,9 @@ class ChipMo(SHProtocol):
 
     @routeCode(2002)
     def recvCardInfo(self, tpack):
-        return self.returnDPack(200, None, tpack.id)
+        d = self._session.expire()
+        d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
+        return d
 
     def parseCLCC(self, clcc):
         typ = 0 if self._mo.get('typ', 'MG2639') == 'MG2639' else 1
@@ -120,7 +122,8 @@ class ChipMo(SHProtocol):
         return None, None
 
     def endCall(self, tpack, oth):
-        d = self._mo.endCall(tpack.body[2])
+        # d = self._mo.endCall(tpack.body[2])
+        d = self._mo.endCall(self._mo.get('cll', None))
         d.addCallback(lambda cl: cl.reload())
         d.addCallback(lambda cl: User.findById(cl['uid']))
         d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : tpack.body[2], 'stt' : -1 } ))
@@ -136,6 +139,7 @@ class ChipMo(SHProtocol):
 
     def changeCall(self, tpack, oth):
         d = Call(tpack.body[2]).reload()
+        # d = Call(self._mo.get('cll', None)).reload()
         d.addCallback(lambda cl: User.findById(cl['uid']))
         d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : tpack.body[2], 'stt' : 0 } ))
         d.addCallback(lambda x: None)
@@ -143,6 +147,14 @@ class ChipMo(SHProtocol):
 
     def returnToUser(self, dpack, rt, body):
         self.passToSck(dpack._PPack.senderChannel, dpack._PPack.senderSid, dpack._PPack.packId, 0x80, rt, body)
+
+    def connectionLost(self, reason):
+        if self._mo:
+            d = Box(self._mo['bid']).delChip(self._mo.id)
+            d.addCallback(lambda x: SHProtocol.connectionLost(self, reason))
+        else:
+            d = SHProtocol.connectionLost(self, reason)
+        return d
 
     # def errorRoutePack(self, failure, tpack):
     #     raise failure

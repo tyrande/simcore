@@ -13,7 +13,7 @@ class Gol(object):
     # @attr env:            Twisted running envirement (test, dev, production)
     # @attr sckPool:        [Session id][Key] -> [Socket] storage, Key should be "news" for phone
     # @attr routePool:      [Route Code] -> [Route api callback] storage, See wiki <Hub API List>http://192.168.6.66/projects/sim/wiki
-    # @attr callTunnel:     Call Tunnel server (turnServer) list. 
+    # @attr callTunnel:     Call Tunnel server (turnServer) <host>:<port> string list. 
 
     def __new__(cls, *args, **kw):  
         if not hasattr(cls, '_instance'):  
@@ -25,11 +25,14 @@ class Gol(object):
         self.env, self.sckPool, self.routePool, self.callTunnels = env, {}, {}, []
 
     # Control Route Pool
-    def addRoute(self, code, callback):
-        self.routePool[code] = callback
+    #   @param sckCls:          Socket Class Name
+    #   @param code:            Route Code
 
-    def route(self, code):
-        return self.routePool.get(code, self.routeMiss)
+    def addRoute(self, sckCls, code, callback):
+        self.routePool["%s%d"%(sckCls.lower(), code)] = callback
+
+    def route(self, sckCls, code):
+        return self.routePool.get("%s%d"%(sckCls.lower(), code), self.routeMiss)
 
     def routeMiss(self, sck, pack):
         self._logPack_('MS', sck, pack)
@@ -46,6 +49,9 @@ class Gol(object):
         return random.sample(self.callTunnels, 1)[0]
 
     # Control Socket Pool
+    #   @param sid:         Session id of the Socket
+    #   @param sckType:     Socket type: '' for normal socket, 'news' for phone noti socket
+
     def addSck(self, sck, sid, sckType=''):
         _sckId = "%s%s"%(sid, sckType)
         self.sckPool[_sckId] = sck
@@ -58,11 +64,30 @@ class Gol(object):
         _sckId = "%s%s"%(sid, sckType)
         if _sckId in self.sckPool: del self.sckPool[_sckId]
 
-    # Log for test or dev
-    def _logPack_(self, act, socket, pack=None, str=None):
-        if not self.env in ['test', 'dev']: return
+    def _log_(self, act, socket, pack=None, str=None):
+        # Log simhub action
+        #   @param act:     Action Name
+        #                       CM : Socket Connection Made
+        #                       CL : Socket Connection Lose
+        #                       FR : Package From
+        #                       To : Package To
+        #                       MS : Package Route Miss
+        #                       ER : Error
+        #   @param socket:  Current Socket of action
+        #   @param pack:    Pack to log
+        #   @param str:     Extra message to log
+
         socketName = socket.__class__.__name__
         peer = socket.transport.getPeer()
+        str = ' ' + str if str else ' '
+        if self.env != 'test': 
+            logsrt = "%s %s:%d"%(act, peer.host, peer.port)
+            if pack : 
+                logsrt += " %s:%s:%s:%s"%(pack.id, pack._flags, pack.apiRet, pack.sid)
+                if socket._mo : logsrt += " %s:%s"%(socket._mo.__class__.__name__, socket._mo.id)
+            logsrt += str
+            print logsrt
+            return
         sktColor = {'PhoneMo' : [41, 37], 'PhoneNoti' : [42, 37], 'CardMo' : [43, 37]}.get(socketName, [44, 37])
         sktOut = "[{0:>15}:{1:<5}]".format(peer.host, peer.port)
         ln = len(sktOut)
@@ -70,9 +95,7 @@ class Gol(object):
         out = "\033[%d;%dm%s"%(sktColor[0], sktColor[1], sktOut) + "\033[%d;%dm [%s] "%(strColor[0], strColor[1], act)
         outBlank = "\033[%d;%dm%s"%(sktColor[0], sktColor[1], ' '*ln) + "\033[%d;%dm%s"%(strColor[0], strColor[1], ' '*6)
         lineLen = 100
-        str = ' ' + str if str else ' '
-
-        # -*- TODO -*- : Print PPack
+        
         if pack != None:
             packColor = { 0x00 : [49, 34], 0x80 : [49, 32] }[pack._flags]
             if len(str) > 1: 
@@ -81,23 +104,20 @@ class Gol(object):
                 out = outBlank
             pbOut = " [Body] %s"%repr(pack.body)
             if type(pack).__name__ == 'TPack':
-                pkOut = " [TP %s %s:%s] route \033[49;31m%s (%s)"%(pack.id, pack.sid, socketName, repr(self.route(pack.apiRet).__name__), pack.apiRet)
+                pkOut = " [TP %s %s:%s] route \033[49;31m%s (%s)"%(pack.id, pack.sid, socketName, repr(self.route(socketName, pack.apiRet).__name__), pack.apiRet)
                 self.printStr(pkOut, out, packColor, lineLen)
-                if pack._TPack != None:
-                    prOut = " [Parent TP %s]"%pack._TPack.id
-                    self.printStr(prOut, outBlank, packColor, lineLen)
             else:
                 pkOut = " [DP %s %s:%s] return %s"%(pack.id, pack.sid, socketName, pack.apiRet)
                 self.printStr(pkOut, out, packColor, lineLen)
-                if pack._TPack != None and pack._TPack._TPack != None:
-                    prOut = " [Parent TP %s]"%pack._TPack._TPack.id
-                    self.printStr(prOut, outBlank, packColor, lineLen)
             if socket._session != None:
                 psOut = " [Session] %s"%(repr(socket._session))
                 self.printStr(psOut, outBlank, packColor, lineLen)
             if socket._mo != None:
-                pcOut = " [MO %s] %s"%(socket._mo.id, repr(socket._mo))
+                pcOut = " [%s %s] %s"%(socket._mo.__class__.__name__, socket._mo.id, repr(socket._mo))
                 self.printStr(pcOut, outBlank, packColor, lineLen)
+            if pack._PPack:
+                ppOut = " [PP] %s"%repr(pack._PPack)
+                self.printStr(ppOut, outBlank, packColor, lineLen)
             self.printStr(pbOut, outBlank, packColor, lineLen)
             self.printStr(' ' + '-'*(len(pkOut)-1), outBlank, packColor, lineLen)
         else:
