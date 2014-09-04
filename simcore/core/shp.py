@@ -39,6 +39,10 @@ class PackBase(object):
         self._TPack = None
         self._PPack = None
 
+    def length(self):
+        sidLen = 0 if self.sid == '' else len(uuid.UUID(hex=self.sid).bytes)
+        return self._headerLen + sidLen + len(msgpack.packb(self.body) if self.body != None else "")
+
 class TPack(PackBase):
     # Request Package inherit from PackBase
     #   See Wiki for more: http://192.168.6.66/projects/sim/wiki/Hub%E5%8D%8F%E8%AE%AE

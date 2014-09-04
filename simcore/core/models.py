@@ -38,7 +38,7 @@ class RedisHash(dict):
         return d
 
     def expire(self, tt=None):
-        if tt: tt = self._infoTX
+        if not tt: tt = self._infoTX
         return self._redis.expire("%s:%s:info"%(self.__class__.__name__, self.id), tt)
 
     @classmethod

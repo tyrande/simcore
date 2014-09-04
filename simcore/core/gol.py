@@ -97,6 +97,7 @@ class Gol(object):
         lineLen = 100
         
         if pack != None:
+            packLen = pack.length()
             packColor = { 0x00 : [49, 34], 0x80 : [49, 32] }[pack._flags]
             if len(str) > 1: 
                 self.printStr(str[:lineLen], out, [49, strColor[0] - 10], lineLen)
@@ -104,10 +105,10 @@ class Gol(object):
                 out = outBlank
             pbOut = " [Body] %s"%repr(pack.body)
             if type(pack).__name__ == 'TPack':
-                pkOut = " [TP %s %s:%s] route \033[49;31m%s (%s)"%(pack.id, pack.sid, socketName, repr(self.route(socketName, pack.apiRet).__name__), pack.apiRet)
+                pkOut = " [TP %s %s:%s %s] route \033[49;31m%s (%s)"%(pack.id, pack.sid, socketName, packLen, repr(self.route(socketName, pack.apiRet).__name__), pack.apiRet)
                 self.printStr(pkOut, out, packColor, lineLen)
             else:
-                pkOut = " [DP %s %s:%s] return %s"%(pack.id, pack.sid, socketName, pack.apiRet)
+                pkOut = " [DP %s %s:%s %s] return %s"%(pack.id, pack.sid, socketName, packLen, pack.apiRet)
                 self.printStr(pkOut, out, packColor, lineLen)
             if socket._session != None:
                 psOut = " [Session] %s"%(repr(socket._session))

@@ -115,7 +115,7 @@ class ChipMo(SHProtocol):
         typ = 0 if self._mo.get('typ', 'MG2639') == 'MG2639' else 1
         clccPair = [['^(OK)', '+CLCC:0,9,(0)', self.endCall],
                    ['\+CLCC:.,.,4,.,.,"([^"]+)"', '+CLCC:3,0,0,(.*)', self.ringing],
-                   ['\+CLCC:1,.,[23],.,.,"([^"]+)"', '+CLCC:1,0,0,(.*)', self.changeCall]]
+                   ['\+CLCC:1,.,0,.,.,"([^"]+)"', '+CLCC:1,0,0,(.*)', self.changeCall]]
         for pr in clccPair:
             match = re.match(pr[typ], re.sub('\s', '', clcc))
             if match: return pr[2], match.group(1)
@@ -123,10 +123,11 @@ class ChipMo(SHProtocol):
 
     def endCall(self, tpack, oth):
         # d = self._mo.endCall(tpack.body[2])
-        d = self._mo.endCall(self._mo.get('cll', None))
+        clid = self._mo.get('cll', None)
+        d = self._mo.endCall(clid)
         d.addCallback(lambda cl: cl.reload())
         d.addCallback(lambda cl: User.findById(cl['uid']))
-        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : tpack.body[2], 'stt' : -1 } ))
+        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : clid, 'stt' : -1 } ))
         d.addCallback(lambda x: None)
         return d
 
