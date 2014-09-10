@@ -238,9 +238,6 @@ class SHProtocol(protocol.Protocol):
         return self.send(pack)
 
     def passToSck(self, channel, SckId, packId, flag, apiRet, body):
-        # -*- Debug -*-
-        # Simhub()._log_('PT', self, None, "[%s %s %s:%s:%s To %s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, channel, sid, pack.routeCode))
-
         ppack = PPack([SckId, self._mo.id, self._mo.__class__.__name__, self.factory.channel, self._session.id, packId, flag, apiRet, body])
         if channel == self.factory.channel and False:
             sck = self.findSck(SckId)
@@ -258,10 +255,11 @@ class SHProtocol(protocol.Protocol):
         #   -*- TODO -*- : 1. Support user has mutiple devices
         #                  2. When push through socket fail, use the Apple way
 
+        if not u: return None
         d = u.newsSessions()
-        d.addCallback(lambda ses: [ self.passToSck(s['chn'], s.id + 'news', '', 0x00, rc, body) for s in ses ])
-        if u.get('rol', None) == '20' and u.get('atk', None):
-            d.addCallback(lambda x: self.sendNotiToApple(u['atk'], 'Calling...'))
+        d.addCallback(lambda ses: [ self.passToSck(s.get('chn', None), s.id + 'news', '', 0x00, rc, body) for s in ses ])
+        # if u.get('rol', None) == '20' and u.get('atk', None):
+            # d.addCallback(lambda x: self.sendNotiToApple(u['atk'], 'Calling...'))
         return d
 
     def sendNotiToApple(self, pushTok, note):
@@ -321,7 +319,7 @@ class RedisSub(redis.SubscriberProtocol):
         ppack = PPack.loads(message)
         sck = self.findSck(ppack.receiverSckId)
         if sck:
-            sck.processPPack(ppack)
+            sck.processPPack(ppack) 
 
     def findSck(self, sid, sckType=''):
         return Gol().findSck(sid, sckType)

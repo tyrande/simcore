@@ -112,7 +112,10 @@ class User(RedisHash):
         return d
 
     def newsSessions(self):
-        return Session.findAllByKey("User:%s:news"%self.id)
+        # Remove dead sessions which scores are 5 minutes ago
+        d = self._redis.zremrangebyscore("User:%s:news"%self.id, 0, int(time.time()) - 5*60)
+        d.addCallback(lambda x: Session.findAllByKey("User:%s:news"%self.id))
+        return d
 
     def delNewsSession(self, sid):
         d = self._redis.zrem("User:%s:news"%self.id, sid)
