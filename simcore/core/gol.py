@@ -3,6 +3,7 @@
 # MainTained by Alan
 # Contact: alan@sinosims.com
 
+from apns import APNs
 import random
 
 def raiseCode(code):
@@ -14,6 +15,7 @@ class Gol(object):
     # @attr sckPool:        [Session id][Key] -> [Socket] storage, Key should be "news" for phone
     # @attr routePool:      [Route Code] -> [Route api callback] storage, See wiki <Hub API List>http://192.168.6.66/projects/sim/wiki
     # @attr callTunnel:     Call Tunnel server (turnServer) <host>:<port> string list. 
+    # @attr apns:          For pushing Apple notice
 
     def __new__(cls, *args, **kw):  
         if not hasattr(cls, '_instance'):  
@@ -63,6 +65,9 @@ class Gol(object):
     def delSck(self, sid, sckType=''):
         _sckId = "%s%s"%(sid, sckType)
         if _sckId in self.sckPool: del self.sckPool[_sckId]
+
+    def setAPNs(self, cert_file, key_file):
+        self.apns = APNs(use_sandbox=True, cert_file=cert_file, key_file=key_file)
 
     def _log_(self, act, socket, pack=None, str=None):
         # Log simhub action

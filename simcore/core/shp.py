@@ -9,7 +9,7 @@ from simcore.core.database import SrPushdb
 from simcore.core.gol import Gol
 from simcore.core.models import Session
 import simcore.libs.txredisapi as redis
-from apns import APNs, Payload
+from apns import Payload
 import struct, msgpack, uuid, time, random
 
 class PackBase(object):
@@ -258,13 +258,13 @@ class SHProtocol(protocol.Protocol):
         if not u: return None
         d = u.newsSessions()
         d.addCallback(lambda ses: [ self.passToSck(s.get('chn', None), s.id + 'news', '', 0x00, rc, body) for s in ses ])
-        # if u.get('rol', None) == '20' and u.get('atk', None):
-            # d.addCallback(lambda x: self.sendNotiToApple(u['atk'], 'Calling...'))
+        if u.get('rol', None) == '20' and u.get('atk', None):
+            d.addCallback(lambda x: self.sendNotiToApple(u['atk'], 'Calling...'))
         return d
 
     def sendNotiToApple(self, pushTok, note):
         payload = Payload(alert=note, sound="default", badge=1)
-        self.factory._apns.gateway_server.send_notification(pushTok, payload)
+        Gol().apns.gateway_server.send_notification(pushTok, payload)
 
     def finishRoutePack(self, pack):
         pass
@@ -291,11 +291,9 @@ class SHProtocol(protocol.Protocol):
 
 class SHPFactory(protocol.Factory):
     # Factory class to create SHProtocol socket
-    # @attr _apns:      For pushing Apple notice
     # @attr _sckType:   Commend socket should be '', News socket should be 'news'
     # @attr channel:    Current server id, use to subscribe Redis Pub&Sub system
 
-    _apns = APNs(use_sandbox=True, cert_file='ca/aps_development.pem', key_file='ca/simhub_nopass.pem')
     _sckType = ''
 
     def __init__(self, channel):
