@@ -88,7 +88,7 @@ class Gol(object):
         if self.env != 'test': 
             logsrt = "%s %s:%d"%(act, peer.host, peer.port)
             if pack : 
-                logsrt += " %s:%s:%s:%s"%(pack.id, pack._flags, pack.apiRet, pack.sid)
+                logsrt += " %s:%s %s:%s"%(pack.apiRet, pack._flags, pack.id, pack.sid)
                 if socket._mo : logsrt += " %s:%s"%(socket._mo.__class__.__name__, socket._mo.id)
             logsrt += str
             print logsrt

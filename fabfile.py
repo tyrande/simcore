@@ -20,7 +20,7 @@ def deploy():
 
 def remote_start():
     with cd('/home/sim/opt/simcore'):
-        run('/home/sim/opt/simenv/bin/twistd simcore --pools=/home/sim/opt/pools/ --env=production --log=/home/sim/opt/simturn/logs/')
+        run('/home/sim/opt/simenv/bin/twistd simcore --pools=/home/sim/opt/pools/ --env=production --logfile=/home/sim/opt/simcore/logs/simcore.log')
 
 def remote_stop():
     run('kill `cat /home/sim/opt/simcore/twistd.pid`')

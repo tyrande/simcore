@@ -36,12 +36,12 @@ class SimLogObserver(FileLogObserver):
 class Options(usage.Options):
     optParameters = [["env", None, "test", "The environment of the running application, should be 'test' or 'productino'"],
                      ["pools", None, "../pools", "The dir contains application configuration"],
-                     ["logfile", 'l', "simcore.log", "The dir contains application log"]]
+                     ["logfile", 'l', "./logs/simcore.log", "The dir contains application log"]]
 
 def wrap_setServiceParent(func, options):
     def decorator(app):
         if options["env"] == 'production':
-            logfile = DailyLogFile(options["logfile"], "./logs")
+            logfile = DailyLogFile(options["logfile"], "")
             flo = SimLogObserver(logfile)
             flo.timeFormat = "%Y-%m-%d %H:%M:%S"
             app.setComponent(ILogObserver, flo.emit)
