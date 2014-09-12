@@ -41,6 +41,10 @@ class RedisHash(dict):
         if not tt: tt = self._infoTX
         return self._redis.expire("%s:%s:info"%(self.__class__.__name__, self.id), tt)
 
+    def _debug_(self, obj, msg=''):
+        print '---- %s ----'%msg, repr(obj)
+        return obj
+
     @classmethod
     def create(self, info={}):
         s = self(uuid.uuid1().hex)
@@ -48,12 +52,14 @@ class RedisHash(dict):
 
     @classmethod
     def findById(self, id):
+        if not id: return None
         d = self._redis.hgetall("%s:%s:info"%(self.__name__, id))
         d.addCallback(lambda hs: self(id, hs) if len(hs) > 0 else None)
         return d
 
     @classmethod
     def findAllByIds(self, ids):
+        if len(ids) == 0: return []
         getScript = "local infos = {}\n"
         getScript += "\n".join([ "infos[%d] = redis.call('hgetall',"%(i+1) + "'%s:%s:info'"%(self.__name__, ids[i]) + ")" for i in range(len(ids)) ])
         getScript += "return infos\n"
@@ -76,6 +82,12 @@ class RedisHash(dict):
         d = self._redis.eval(getScript, [key, self.__name__])
         d.addCallback(lambda infos: [ self(i[0], dict(zip(i[1][::2], i[1][1::2]))) for i in infos ])
         return d
+
+    @classmethod
+    def reloadFromInfo(self, info):
+        _id = info.get('id', None)
+        if not _id: return None
+        return self(_id, info)
 
 class Session(RedisHash):
     # Session for auth the device which connected to server
@@ -106,6 +118,27 @@ class User(RedisHash):
     #                           '20' -> 0x20  phone iOS
     #                           '21' -> 0x21  phone Android
 
+    def newsHeart(self, ses, chn):
+        setScript = """
+            redis.call('hset', 'Session:'..KEYS[1]..':info', 'chn', KEYS[2])
+            redis.call('zadd', 'User:'..KEYS[3]..':news', KEYS[4], KEYS[1])
+            local c = {}
+            local cs  = {}
+            local cll = ''
+            local bs = redis.call('zrange', 'User:'..KEYS[3]..':Boxes', 0, -1)
+            for k, v in pairs(bs) do
+                cs = redis.call('zrange', 'Box:'..v..':Chips', 0, -1)
+                for p, q in pairs(cs) do
+                    cll = redis.call('hget', 'Chip:'..q..':info', 'cll')
+                    c[p] = redis.call('hmget', 'Call:'..tostring(cll)..':info', 'uid', 'cpid', 'oth', 'id', 'st')
+                end
+            end
+            return c
+        """
+        d = self._redis.eval(setScript, [ses.id, chn, self.id, int(time.time())])
+        d.addCallback(lambda cls: [ {'cid' : c[1], 'oth' : c[2], 'seq' : c[3], 'tim' : int(c[4])} for c in cls if c[0] == '' and (time.time() - int(c[4])) < 60 ])
+        return d
+
     def addNewsSession(self, sid):
         d = self._redis.zadd("User:%s:news"%self.id, int(time.time()), sid)
         d.addCallback(lambda x: self)
@@ -124,8 +157,8 @@ class User(RedisHash):
 
     def addBox(self, bid):
         addScript = """
-            redis.call('zadd', 'User:'..KEYS[1]..':'..'Boxes', KEYS[3], KEYS[2])
-            redis.call('zadd', 'Box:'..KEYS[2]..':'..'Users', KEYS[3], KEYS[1])
+            redis.call('zadd', 'User:'..KEYS[1]..':Boxes', KEYS[3], KEYS[2])
+            redis.call('zadd', 'Box:'..KEYS[2]..':Users', KEYS[3], KEYS[1])
         """
         return self._redis.eval(addScript, [self.id, bid, int(time.time())])
 
@@ -134,8 +167,8 @@ class User(RedisHash):
 
     def delBox(self, bid):
         delScript = """
-            redis.call('zrem', 'User:'..KEYS[1]..':'..'Boxes', KEYS[2])
-            redis.call('zrem', 'Box:'..KEYS[2]..':'..'Users', KEYS[1])
+            redis.call('zrem', 'User:'..KEYS[1]..':Boxes', KEYS[2])
+            redis.call('zrem', 'Box:'..KEYS[2]..':Users', KEYS[1])
         """
         return self._redis.eval(delScript, [self.id, bid])
 
@@ -152,15 +185,9 @@ class User(RedisHash):
             end
             return c
         """
-        # d = self.boxes()
-        # d.addCallback(lambda bs: [ {b.id : b.chips()} for b in bs ])
         d = self._redis.eval(findScript, [self.id])
         d.addCallback(lambda infos: [ Chip(i[0], dict(zip(i[1][::2], i[1][1::2]))) for i in infos ])
         return d
-        # return Chip.findAllByKey("User:%s:Chips"%self.id)
-        # d = self._redis.zrange("U:%s:list:C"%self.id, 0, -1)
-        # d.addCallback(lambda cids: Chip.findAllByIds(['460025125862622']))
-        # return d
 
     def chip(self, cpid):
         findScript = """
@@ -173,8 +200,7 @@ class User(RedisHash):
             return cp
         """
         d = self._redis.eval(findScript, [cpid, self.id])
-        d.addCallback(lambda hs: dict(zip(hs[::2], hs[1::2])))
-        d.addCallback(lambda hs: Chip(cpid, hs) if len(hs) > 0 else raiseCode(603))
+        d.addCallback(lambda hs: Chip(cpid, dict(zip(hs[::2], hs[1::2]))) if len(hs) > 0 else raiseCode(603))
         return d
 
     def addCard(self, cdid):
@@ -204,36 +230,92 @@ class Chip(RedisHash):
     #
     #   @key cll:       str     Current Call id, Key don't exist or Value is '' if no current call
 
-    def startCall(self, clid, uid, oth, typ):
-        cl = Call(clid)
-        d = cl.save({ 'cdid' : self.get('cdid', ''), 'cpid' : self.id, 'bid' : self['bid'], 'uid' : uid, 'oth' : oth, 'typ' : typ, 'stt' : 1, 'st' : int(time.time()) })
-        d.addCallback(lambda c: self.save({ 'cll' : cl.id }))
-        d.addCallback(lambda x: cl)
+    def login(self, imsi, bid, ses, chn, mod):
+        self.update({ 'cdid' : imsi, 'bid' : bid, 'sid' : ses.id, 'chn' : chn, 'mod' : mod })
+        ses['Chip'] = self.id
+        setScript = """
+            redis.call('hmset', 'Chip:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'bid', KEYS[3], 'sid', KEYS[4], 'chn', KEYS[5], 'mod', KEYS[6])
+            redis.call('zadd', 'Box:'..KEYS[3]..':Chips', tonumber(KEYS[7]), KEYS[1])
+            redis.call('hset', 'Session:'..KEYS[4]..':info', 'Chip', KEYS[1])
+        """
+        return self._redis.eval(setScript, [self.id, imsi, bid, ses.id, chn, mod, int(time.time())])
+
+    def startCall(self, clid, uid):
+        self['cll'] = clid
+        setScript = """
+            redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', KEYS[5], 'oth', KEYS[6], 'typ', '0', 'stt', '1', 'st', KEYS[7])
+            redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
+        """
+        d = self._redis.eval(setScript, [clid, self.get('cdid', ''), self.id, self['bid'], uid, clid[0:-16], int(time.time())]) 
+        d.addCallback(lambda x: Call(clid))
+        return d
+
+    def ringing(self, clid):
+        self['cll'] = clid
+        setScript = """
+            redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', '', 'oth', KEYS[5], 'typ', '1', 'stt', '1', 'st', KEYS[6])
+            redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
+            local vals = {}
+            local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
+            for k, v in pairs(ids) do
+                vals[k] = {v,redis.call('hgetall', 'User:'..v..':info')}
+            end
+            return vals
+        """
+        d = self._redis.eval(setScript, [clid, self.get('cdid', ''), self.id, self['bid'], clid[0:-16], int(time.time())])
+        d.addCallback(lambda infos: ([ User(i[0], dict(zip(i[1][::2], i[1][1::2]))) for i in infos ], clid))
         return d
 
     def answerCall(self, clid, uid):
-        cl = Call(clid)
-        d = cl.save({ 'uid' : uid })
-        d.addCallback(lambda c: cl)
-        return d
+        return Call(clid).save({ 'uid' : uid })
 
-    def endCall(self, clid):
-        cl = Call(clid)
-        d = cl.save({ 'stt' : 0, 'ed' : int(time.time()) })
-        d.addCallback(lambda c: self.save({ 'cll' : '' }))
-        d.addCallback(lambda c: self._redis.rpush('System:Calls', cl.id))
-        d.addCallback(lambda x: cl)
+    def endCall(self):
+        clid = self.get('cll', None)
+        if not clid: return None
+        setScript = """
+            redis.call('hmset', 'Call:'..KEYS[1]..':info', 'stt', KEYS[2], 'ed', KEYS[3])
+            redis.call('hdel', 'Chip:'..KEYS[4]..':info', 'cll')
+            redis.call('rpush', 'System:Calls', KEYS[1])
+            local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
+            local vals = {}
+            if uid ~= '' then
+                vals[1] = {uid,redis.call('hgetall', 'User:'..uid..':info')}
+            else
+                local ids = redis.call('zrange', 'Box:'..KEYS[5]..':Users', 0, -1)
+                for k, v in pairs(ids) do
+                    vals[k] = {v,redis.call('hgetall', 'User:'..v..':info')}
+                end
+            end
+            return vals
+        """
+        d = self._redis.eval(setScript, [clid, 0, int(time.time()), self.id, self['bid']])
+        # d.addCallback(lambda info: (User.reloadFromInfo(dict(zip(info[::2], info[1::2]))), clid))
+        d.addCallback(lambda infos: ([ User(i[0], dict(zip(i[1][::2], i[1][1::2]))) for i in infos ], clid))
         return d
 
     def users(self):
         return Box(self['bid']).users()
-        # d = self._redis.zrange("C:%s:list:U"%self.id, 0, -1)
-        # d.addCallback(lambda uids: User.findAllByIds(['0f9c509afcd711e383b700163e0212e4']))
-        # d.addCallback(lambda s: self.pp(s))
-        # return d
+
+    def onl(self):
+        setScript = """
+            redis.call('zadd', 'Box:'..KEYS[1]..':Chips', KEYS[2], KEYS[3])
+            redis.call('expire', 'Session:'..KEYS[4]..':info', KEYS[5])
+        """
+        return self._redis.eval(setScript, [self['bid'], int(time.time()), self.id, self['sid'], Session._infoTX])
 
     def call(self):
         pass
+
+    def callingUser(self):
+        cll = self.get('cll', None)
+        if not cll: return None 
+        findScript = """
+            local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
+            return redis.call('hgetall', 'User:'..uid..':info')
+        """
+        d = self._redis.eval(findScript, [cll])
+        d.addCallback(lambda info: User.reloadFromInfo(dict(zip(info[::2], info[1::2]))))
+        return d
 
 class Box(RedisHash):
     # Box Model inherit from RedisHash

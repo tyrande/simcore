@@ -118,8 +118,7 @@ class SHProtocol(protocol.Protocol):
     _redis = SrPushdb().redisPool
 
     def connectionMade(self):
-        # -*- Debug -*-
-        Gol()._log_('CM', self, None, '>> %s'%self.__class__.__name__)
+        Gol()._log_('CM', self, None, '>> %s'%self.__class__.__name__) # -*- Log -*- #
 
         self._recvBuf = ''
         self._pckId = 1000 + random.randint(0, 5000)
@@ -128,8 +127,7 @@ class SHProtocol(protocol.Protocol):
         self._TPackWaitPeer = {}
 
     def connectionLost(self, reason):
-        # -*- Debug -*-
-        Gol()._log_('CL', self, None, '<< %s'%self.__class__.__name__)
+        Gol()._log_('CL', self, None, '<< %s'%self.__class__.__name__) # -*- Log -*- #
         return Gol().delSck(self._session.id, self.factory._sckType) if self._session else defer.Deferred()
         
 
@@ -145,8 +143,7 @@ class SHProtocol(protocol.Protocol):
             if tp: pack.peerToTPack(tp)
             else: self.errorRoutePack(500, pack)
         
-        # -*- Debug -*-
-        Gol()._log_('FR', self, pack)
+        Gol()._log_('FR', self, pack) # -*- Log -*- #
         d = defer.Deferred()
         d.addCallback(self.loadSession)
         d.addCallback(self.loadMo)
@@ -160,9 +157,6 @@ class SHProtocol(protocol.Protocol):
         #   @param senderCls:       Sender socket mo class
         #   @param senderChannel:   Sender socket factory channel
         
-        # -*- Debug -*-
-        # Gol()._log_('PP', self, None, "[%s %s %s:%s:%s RC %s:%s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, senderChannel, senderCls, senderId, pack.routeCode))
-
         if ppack.flag == 0x00:
             pack = TPack(self.newPackId(), ppack.apiRet, self._session.id, ppack.body)
             pack.peerToPPack(ppack)
@@ -170,17 +164,6 @@ class SHProtocol(protocol.Protocol):
             self.send(pack)
         else:
             self.returnDPack(ppack.apiRet, ppack.body, ppack.packId)
-
-        # if type(pack) == TPack:
-        #     pack.setMo(senderId, senderCls, senderChannel)
-        #     if parentTPack:
-        #         pack.peerToTPack(parentTPack)
-
-        #     self.addTPackWaiting(pack)
-        #     return self.send(pack)
-        #     return Gol().route(pack.routeCode)(self, pack)
-        # else:
-        #     return self.send(pack)
 
     def loadSession(self, pack):
         # Load Session by received package sid
@@ -198,6 +181,7 @@ class SHProtocol(protocol.Protocol):
         return d
 
     def setSession(self, s):
+        if not s: raise Exception(403)
         self._session = s
         return s
 
@@ -218,9 +202,7 @@ class SHProtocol(protocol.Protocol):
         return mo
 
     def send(self, pack):
-        # -*- Debug -*-
-        Gol()._log_('TO', self, pack)
-
+        Gol()._log_('TO', self, pack) # -*- Log -*- #
         self.transport.write(pack.dump())
         return pack
 
@@ -246,11 +228,16 @@ class SHProtocol(protocol.Protocol):
         else:
             return self._redis.publish(channel, ppack.dump())
 
-    def notiToUsers(self, us, rc, body):
-        [ self.notiToUser(u, rc, body) for u in us ]
+    def notiToUsers(self, us, rc, body, withAPNs=False, msg='Calling..'):
+        [ self.notiToUser(u, rc, body, withAPNs, msg) for u in us ]
 
-    def notiToUser(self, u, rc, body):
+    def notiToUser(self, u, rc, body, withAPNs=False, msg='Calling...'):
         # Push notice through user's news socket
+        #   @param u:               User to push notice
+        #   @param rc:              Route code for pushing package
+        #   @param body:            Body for pushing package
+        #   @param withAPNs:        Swith for pushing through Apple APNs, Only Ringing and SMS Receive need swith to True
+        #
         #   If user's phone system is iOS, also push notice through Apple's notice channel
         #   -*- TODO -*- : 1. Support user has mutiple devices
         #                  2. When push through socket fail, use the Apple way
@@ -258,8 +245,8 @@ class SHProtocol(protocol.Protocol):
         if not u: return None
         d = u.newsSessions()
         d.addCallback(lambda ses: [ self.passToSck(s.get('chn', None), s.id + 'news', '', 0x00, rc, body) for s in ses ])
-        if u.get('rol', None) == '20' and u.get('atk', None):
-            d.addCallback(lambda x: self.sendNotiToApple(u['atk'], 'Calling...'))
+        if withAPNs and u.get('rol', None) == '20' and u.get('atk', None):
+            d.addCallback(lambda x: self.sendNotiToApple(u['atk'], msg))
         return d
 
     def sendNotiToApple(self, pushTok, note):
@@ -288,6 +275,9 @@ class SHProtocol(protocol.Protocol):
     def findSck(self, SckId):
         return Gol().findSck(SckId)
 
+    def _debug_(self, obj, msg=''):
+        print '---- %s ----'%msg, repr(obj)
+        return obj
 
 class SHPFactory(protocol.Factory):
     # Factory class to create SHProtocol socket

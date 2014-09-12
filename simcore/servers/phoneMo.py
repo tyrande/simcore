@@ -11,61 +11,6 @@ import time, uuid
 class PhoneMo(SHProtocol):
     _moClass = User
 
-    @routeCode(201)
-    def doAuth(self, tpack):
-        # -*- TODO -*- : Use RSA encrypt package body
-
-        d = self._session.save({ 'rol' : tpack.body[1] })
-        d.addCallback(lambda x: self.returnDPack(200, ['asdf'*4, 'x'*12], tpack.id))
-        return d
-
-    @routeCode(202)
-    def doLogin(self, tpack):
-        # -*- TODO -*- : Use RSA encrypt package body
-
-        (login, pwd, imei) = tpack.body[0].split('\n')
-        # d = User.findAndCheckByLogin(login, pwd)
-        # d.addCallback(lambda u: self.setUserToSession(u, imei))
-        d = self._session.save({ self._moClass.__name__ : '0f9c509afcd711e383b700163e0212e4', 'imei' : imei })
-        d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
-        return d
-
-    @routeCode(203)
-    def doRegister(self, tpack):
-        # -*- TODO -*- : Use RSA encrypt package body
-
-        (login, pwd, imei) = tpack.body[0].split('\n')
-        # d = User.create(login, pwd)
-        # d.addCallback(lambda u: self.setUserToSession(u, imei))
-        d = self._session.save({ self._moClass.__name__ : '0f9c509afcd711e383b700163e0212e4', 'imei' : imei })
-        d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
-        return d
-
-    # def setUserToSession(self, u, imei):
-    #     # Set User to current Session
-    #     #   Use for doLogin and doRegister, accept defer param
-    #     #   @param u:       User which pass the password auth
-    #     #   @param imei:    User's UDID of the Device
-
-    #     self.setMo(u)
-    #     d = u.save({ 'imei' : imei, 'rol' : self._session['rol'], 'sid' : self._session.id, 'chn' : self.factory.channel })
-    #     d.addCallback(lambda u: self._session.save({ self._moClass.__name__ : u.id, 'imei' : imei }))
-    #     return d
-
-    @routeCode(3001)
-    def doListCard(self, tpack):
-        if self._mo == None: raise Exception(401)
-        d = self._mo.chips()
-        d.addCallback(lambda cps: self.returnDPack(200, [ { 'cid' : c.id, 'cno' : c.get('cno', ''), 'sig' : c.get('sig', 0), 'onl' : c.get('onl', 0) } for c in cps], tpack.id))
-        return d
-
-    @routeCode(3002)
-    def doGetCard(self, tpack): return None
-    #     if self._mo == None: raise Exception(401)
-    #     d = self._mo.card(tpack.body['cid'])
-    #     d.addCallback(lambda c: c.getCard(tpack))
-    #     return d
-
     @routeCode(3003)
     def doAddCard(self, tpack):
         d = self._mo.addCard(tpack)

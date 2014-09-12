@@ -13,11 +13,8 @@ class PhoneNoti(SHProtocol):
     @routeCode(401)
     def doNews(self, tpack):
         if not self._mo: raise Exception(401)
-        d = self._session.save({ 'chn' : self.factory.channel })
-        d.addCallback(lambda x: self._mo.addNewsSession(self._session.id))
-        d.addCallback(lambda x: self._mo.chips())
-        d.addCallback(lambda cps: Call.findAllByIds([ c.get('cll', '') for c in cps]))
-        d.addCallback(lambda cs: self.returnDPack(200, [{'cid' : c['cpid'], 'oth' : c['oth'], 'seq' : c['id'], 'tim' : int(c.get('st', 0))} for c in cs if (c.get('uid', '') == '' and time.time() - int(c.get('st', 0)) < 60) ], tpack.id))
+        d = self._mo.newsHeart(self._session, self.factory.channel)
+        d.addCallback(lambda cs: self.returnDPack(200, cs, tpack.id))
         return d
 
     @routeCode(402)

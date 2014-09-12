@@ -33,9 +33,7 @@ class ChipMo(SHProtocol):
 
         (mod, imei, imsi, bid) = tpack.body[0].split('\n')
         c = self.setMo(Chip(imei))
-        d = c.save({ 'cdid' : imsi, 'bid' : bid, 'sid' : self._session.id, 'chn' : self.factory.channel, 'mod' : mod })
-        d.addCallback(lambda c: Box(bid).addChip(c.id))
-        d.addCallback(lambda x: self._session.update({ self._moClass.__name__ : c.id }))
+        d = c.login(imsi, bid, self._session, self.factory.channel, mod)
         d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
         return d
 
@@ -55,27 +53,17 @@ class ChipMo(SHProtocol):
         #   see Wiki for more: http://192.168.6.66/projects/sim/wiki/AT%E5%91%BD%E4%BB%A4%E5%8D%8F%E8%AE%AE
 
         if self._mo == None: raise Exception(401)
-        d = User.findById(dpack._PPack.senderId)
         if dpack._TPack.body[1] == 1:
-            d.addCallback(lambda u: self._mo.startCall(dpack._TPack.body[2], u.id, dpack._TPack.body[6], 0))
+            d = self._mo.startCall(dpack._TPack.body[2], dpack._PPack.senderId)
+            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
         elif dpack._TPack.body[1] == 2:
-            # d.addCallback(lambda u: self._mo.endCall(dpack._TPack.body[2]))
-            pass
+            d = self.returnToUser(dpack, dpack.apiRet, { 'stt' : 0 })
         elif dpack._TPack.body[1] == 3:
-            d.addCallback(lambda u: self._mo.answerCall(dpack._TPack.body[2], u.id))
+            d = self._mo.answerCall(dpack._TPack.body[2], dpack._PPack.senderId)
+            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
         else:
             d = None
-        if d: d.addCallback(lambda cl: self.returnToUser(dpack, dpack.apiRet, { 'stt' : cl.get('stt', 0) }))
         return d
-
-    @routeCode(1002)
-    def recvQueryCard(self, dpack): return None
-    #     if dpack.apiRet != 200: raise Exception(dpack.apiRet)
-    #     if self._mo.id != dpack.body[0]: raise Exception(603)
-    #     info = { 'sig' : dpack.body[1], 'onl' : dpack.body[2], 'stt' : dpack.body[3], 'set' : dpack.body[4]}
-    #     d = self._mo.update(info)
-    #     d.addCallback(lambda x: [dpack.parentTPack().createDPack(dpack.apiRet, info.update({'cid' : self._mo.id}))])
-    #     return d
 
     @routeCode(1003)
     def recvOpenAudio(self, dpack): return None
@@ -96,53 +84,48 @@ class ChipMo(SHProtocol):
         #       '+CLCC: 1,1,4,0,0,"13902658325",129/r/nOK'    :   Ringing
         #       '+CLCC: 1,1,0,0,0,"13902658325",129/r/nOK'    :   Answer connected
         #   see Wiki for more: http://192.168.6.66/projects/sim/wiki/CLCC%E5%91%BD%E4%BB%A4%E8%BF%94%E5%9B%9E
+        #
+        #   tpack.body[2] Calling Sequence id
 
         # if self._mo.id != tpack.body[0]: raise Exception(603)
         if tpack.body[1] == 200:
-            cb, oth = self.parseCLCC(tpack.body[6])
-            d = cb(tpack, oth) if cb else None
+            cb = self.parseCLCC(tpack.body[6])
+            d = cb(tpack.body[2]) if cb else None
         else:
             d = None
         return d
 
     @routeCode(2002)
     def recvCardInfo(self, tpack):
-        d = self._session.expire()
+        d = self._mo.onl()
         d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
         return d
 
     def parseCLCC(self, clcc):
-        typ = 0 if self._mo.get('typ', 'MG2639') == 'MG2639' else 1
-        clccPair = [['^(OK)', '+CLCC:0,9,(0)', self.endCall],
-                   ['\+CLCC:.,.,4,.,.,"([^"]+)"', '+CLCC:3,0,0,(.*)', self.ringing],
-                   ['\+CLCC:1,.,0,.,.,"([^"]+)"', '+CLCC:1,0,0,(.*)', self.changeCall]]
+        typ = 0 if self._mo.get('mod', 'MG2639') == 'MG2639' else 1
+        clccPair = [['^(OK)', '\+CLCC:0,9,(0)', self.endCall],
+                   ['\+CLCC:.,.,4,.,.,"([^"]*)"', '\+CLCC:3,0,0(.*)', self.ringing],
+                   ['\+CLCC:1,.,0,.,.,"([^"]*)"', '\+CLCC:1,0,0(.*)', self.changeCall]]
         for pr in clccPair:
             match = re.match(pr[typ], re.sub('\s', '', clcc))
-            if match: return pr[2], match.group(1)
-        return None, None
+            if match: return pr[2]
+        return None
 
-    def endCall(self, tpack, oth):
-        # d = self._mo.endCall(tpack.body[2])
-        clid = self._mo.get('cll', None)
-        d = self._mo.endCall(clid)
-        d.addCallback(lambda cl: cl.reload())
-        d.addCallback(lambda cl: User.findById(cl['uid']))
-        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : clid, 'stt' : -1 } ))
+    def endCall(self, seq):
+        d = self._mo.endCall()
+        d.addCallback(lambda uc: self.notiToUsers(uc[0], 4004, { 'cid' : self._mo.id, 'seq' : uc[1], 'stt' : -1 } ))
         d.addCallback(lambda x: None)
         return d
 
-    def ringing(self, tpack, oth):
-        d = self._mo.startCall(tpack.body[2], '', oth, 1)
-        d.addCallback(lambda x: self._mo.users())
-        d.addCallback(lambda us: self.notiToUsers(us, 4001, { 'cid' : self._mo.id, 'oth' : oth, 'seq' : tpack.body[2], 'tim' : int(time.time()) } ))
+    def ringing(self, seq):
+        d = self._mo.ringing(seq)
+        d.addCallback(lambda uc: self.notiToUsers(uc[0], 4001, { 'cid' : self._mo.id, 'oth' : seq[0:-16], 'seq' : seq, 'tim' : int(time.time()) }, True, u'%s \u6765\u7535'%seq[0:-16] ))
         d.addCallback(lambda x: None)
         return d
 
-    def changeCall(self, tpack, oth):
-        d = Call(tpack.body[2]).reload()
-        # d = Call(self._mo.get('cll', None)).reload()
-        d.addCallback(lambda cl: User.findById(cl['uid']))
-        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : tpack.body[2], 'stt' : 0 } ))
+    def changeCall(self, seq):
+        d = self._mo.callingUser()
+        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
         d.addCallback(lambda x: None)
         return d
 
