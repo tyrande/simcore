@@ -113,19 +113,20 @@ class ChipMo(SHProtocol):
 
     def endCall(self, seq):
         d = self._mo.endCall()
-        d.addCallback(lambda uc: self.notiToUsers(uc[0], 4004, { 'cid' : self._mo.id, 'seq' : uc[1], 'stt' : -1 } ))
+        d.addCallback(lambda sa: self.notiToUsers(sa[0][0], sa[0][1], 4004, { 'cid' : self._mo.id, 'seq' : sa[1], 'stt' : -1 } ))
         d.addCallback(lambda x: None)
         return d
 
     def ringing(self, seq):
         d = self._mo.ringing(seq)
-        d.addCallback(lambda uc: self.notiToUsers(uc[0], 4001, { 'cid' : self._mo.id, 'oth' : seq[0:-16], 'seq' : seq, 'tim' : int(time.time()) }, True, u'%s \u6765\u7535'%seq[0:-16] ))
+        d.addCallback(lambda sa: self.notiToUsers(sa[0][0], sa[0][1], 4001, { 'cid' : self._mo.id, 'oth' : seq[0:-16], 'seq' : seq, 'tim' : int(time.time()) }, True, u'%s \u6765\u7535'%seq[0:-16] ))
         d.addCallback(lambda x: None)
         return d
 
     def changeCall(self, seq):
-        d = self._mo.callingUser()
-        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
+        # d = self._mo.callingUser()
+        d = self._mo.changeCall()
+        d.addCallback(lambda sa: self.notiToUsers(sa[0][0], sa[0][1], 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
         d.addCallback(lambda x: None)
         return d
 

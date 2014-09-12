@@ -228,8 +228,17 @@ class SHProtocol(protocol.Protocol):
         else:
             return self._redis.publish(channel, ppack.dump())
 
-    def notiToUsers(self, us, rc, body, withAPNs=False, msg='Calling..'):
-        [ self.notiToUser(u, rc, body, withAPNs, msg) for u in us ]
+    def notiToUsers(self, sess, atks, rc, body, withAPNs=False, msg='Calling..'):
+        _ss = {}
+        [ _ss.update({s[0] : s[1]}) for s in sess ]
+        for sid, chn in _ss.items():
+            self.passToSck(chn, sid + 'news', '', 0x00, rc, body)
+        if withAPNs:
+            _as = {}
+            [ _as.update({a[0] : a[1]}) for a in atks ]
+            for atk, rol in _as.items():
+                if atk != '' and rol == '20': self.sendNotiToApple(atk, msg)
+        # [ self.notiToUser(u, rc, body, withAPNs, msg) for u in us ]
 
     def notiToUser(self, u, rc, body, withAPNs=False, msg='Calling...'):
         # Push notice through user's news socket
@@ -237,6 +246,7 @@ class SHProtocol(protocol.Protocol):
         #   @param rc:              Route code for pushing package
         #   @param body:            Body for pushing package
         #   @param withAPNs:        Swith for pushing through Apple APNs, Only Ringing and SMS Receive need swith to True
+        #   @param msg:             Message for pushing through Apple APNs to User
         #
         #   If user's phone system is iOS, also push notice through Apple's notice channel
         #   -*- TODO -*- : 1. Support user has mutiple devices

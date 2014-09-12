@@ -180,7 +180,7 @@ class User(RedisHash):
             for k, v in pairs(bs) do
                 cs = redis.call('zrange', 'Box:'..v..':Chips', 0, -1)
                 for p, q in pairs(cs) do
-                    c[p] = {q,redis.call('hgetall', 'Chip:'..q..':info')}
+                    table.insert(c, {q,redis.call('hgetall', 'Chip:'..q..':info')})
                 end
             end
             return c
@@ -255,19 +255,41 @@ class Chip(RedisHash):
         setScript = """
             redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', '', 'oth', KEYS[5], 'typ', '1', 'stt', '1', 'st', KEYS[6])
             redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
-            local vals = {}
             local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
+            local atks = {}
+            local ses = {}
             for k, v in pairs(ids) do
-                vals[k] = {v,redis.call('hgetall', 'User:'..v..':info')}
+                table.insert(atks, redis.call('hmget', 'User:'..v..':info', 'atk', 'rol'))
+                redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[6] - 5*60)
+                for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
+                    table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
+                end
             end
-            return vals
+            return {ses, atks}
         """
         d = self._redis.eval(setScript, [clid, self.get('cdid', ''), self.id, self['bid'], clid[0:-16], int(time.time())])
-        d.addCallback(lambda infos: ([ User(i[0], dict(zip(i[1][::2], i[1][1::2]))) for i in infos ], clid))
+        d.addCallback(lambda sa: (sa, clid))
         return d
 
     def answerCall(self, clid, uid):
         return Call(clid).save({ 'uid' : uid })
+
+    def changeCall(self):
+        clid = self.get('cll', None)
+        if not clid: return None 
+        findScript = """
+            local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
+            local atks = {redis.call('hmget', 'User:'..uid..':info', 'atk', 'rol')}
+            local ses = {}
+            redis.call('zremrangebyscore', 'User:'..uid..':news', 0, KEYS[2] - 5*60)
+            for k,v in pairs(redis.call('zrange', 'User:'..uid..':news', 0, -1)) do
+                table.insert(ses, {v,redis.call('hget', 'Session:'..v..':info', 'chn')})
+            end
+            return {ses, atks}
+        """
+        d = self._redis.eval(findScript, [clid, int(time.time())])
+        d.addCallback(lambda sa: (sa, clid))
+        return d
 
     def endCall(self):
         clid = self.get('cll', None)
@@ -277,21 +299,25 @@ class Chip(RedisHash):
             redis.call('hdel', 'Chip:'..KEYS[4]..':info', 'cll')
             redis.call('rpush', 'System:Calls', KEYS[1])
             local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
-            local vals = {}
-            if uid ~= '' then
-                vals[1] = {uid,redis.call('hgetall', 'User:'..uid..':info')}
-            else
-                local ids = redis.call('zrange', 'Box:'..KEYS[5]..':Users', 0, -1)
-                for k, v in pairs(ids) do
-                    vals[k] = {v,redis.call('hgetall', 'User:'..v..':info')}
+            local ids = {uid}
+            if uid == '' then ids = redis.call('zrange', 'Box:'..KEYS[5]..':Users', 0, -1) end
+            local atks = {}
+            local ses = {}
+            for k, v in pairs(ids) do
+                table.insert(atks, redis.call('hmget', 'User:'..v..':info', 'atk', 'rol'))
+                redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[3] - 5*60)
+                for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
+                    table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
                 end
             end
-            return vals
+            return {ses, atks}
         """
         d = self._redis.eval(setScript, [clid, 0, int(time.time()), self.id, self['bid']])
-        # d.addCallback(lambda info: (User.reloadFromInfo(dict(zip(info[::2], info[1::2]))), clid))
-        d.addCallback(lambda infos: ([ User(i[0], dict(zip(i[1][::2], i[1][1::2]))) for i in infos ], clid))
+        d.addCallback(lambda sa: (sa, clid))
         return d
+
+        # d = self._redis.zremrangebyscore("User:%s:news"%self.id, 0, int(time.time()) - 5*60)
+        # d.addCallback(lambda x: Session.findAllByKey("User:%s:news"%self.id))
 
     def users(self):
         return Box(self['bid']).users()
