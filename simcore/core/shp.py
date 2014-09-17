@@ -190,6 +190,7 @@ class SHProtocol(protocol.Protocol):
         #   If there has no current session:       Nothing to load
         #   Else:                                  Find Mo by Mo class and Mo id which store in session
 
+        if self._mo: return None
         if not self._session: return None
         _moid = self._session.get(self._moClass.__name__, None)
         if not _moid: return None
@@ -209,6 +210,10 @@ class SHProtocol(protocol.Protocol):
     def newPackId(self):
         self._pckId = (self._pckId + 1)%50000
         return self._pckId
+
+    def sendTPack(self, rt, body):
+        pack = TPack(self.newPackId(), rt, self._session.id, body)
+        return self.send(pack)
 
     def returnDPack(self, rt, body, tpid):
         # Respond package through current socket
@@ -240,24 +245,24 @@ class SHProtocol(protocol.Protocol):
                 if atk != '' and rol == '20': self.sendNotiToApple(atk, msg)
         # [ self.notiToUser(u, rc, body, withAPNs, msg) for u in us ]
 
-    def notiToUser(self, u, rc, body, withAPNs=False, msg='Calling...'):
-        # Push notice through user's news socket
-        #   @param u:               User to push notice
-        #   @param rc:              Route code for pushing package
-        #   @param body:            Body for pushing package
-        #   @param withAPNs:        Swith for pushing through Apple APNs, Only Ringing and SMS Receive need swith to True
-        #   @param msg:             Message for pushing through Apple APNs to User
-        #
-        #   If user's phone system is iOS, also push notice through Apple's notice channel
-        #   -*- TODO -*- : 1. Support user has mutiple devices
-        #                  2. When push through socket fail, use the Apple way
+    # def notiToUser(self, u, rc, body, withAPNs=False, msg='Calling...'):
+    #     # Push notice through user's news socket
+    #     #   @param u:               User to push notice
+    #     #   @param rc:              Route code for pushing package
+    #     #   @param body:            Body for pushing package
+    #     #   @param withAPNs:        Swith for pushing through Apple APNs, Only Ringing and SMS Receive need swith to True
+    #     #   @param msg:             Message for pushing through Apple APNs to User
+    #     #
+    #     #   If user's phone system is iOS, also push notice through Apple's notice channel
+    #     #   -*- TODO -*- : 1. Support user has mutiple devices
+    #     #                  2. When push through socket fail, use the Apple way
 
-        if not u: return None
-        d = u.newsSessions()
-        d.addCallback(lambda ses: [ self.passToSck(s.get('chn', None), s.id + 'news', '', 0x00, rc, body) for s in ses ])
-        if withAPNs and u.get('rol', None) == '20' and u.get('atk', None):
-            d.addCallback(lambda x: self.sendNotiToApple(u['atk'], msg))
-        return d
+    #     if not u: return None
+    #     d = u.newsSessions()
+    #     d.addCallback(lambda ses: [ self.passToSck(s.get('chn', None), s.id + 'news', '', 0x00, rc, body) for s in ses ])
+    #     if withAPNs and u.get('rol', None) == '20' and u.get('atk', None):
+    #         d.addCallback(lambda x: self.sendNotiToApple(u['atk'], msg))
+    #     return d
 
     def sendNotiToApple(self, pushTok, note):
         payload = Payload(alert=note, sound="default", badge=1)

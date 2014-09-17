@@ -11,12 +11,6 @@ import time, uuid
 class PhoneMo(SHProtocol):
     _moClass = User
 
-    @routeCode(3003)
-    def doAddCard(self, tpack):
-        d = self._mo.addCard(tpack)
-        d.addCallback(lambda x: tpack.createDPack(200, None))
-        return d
-
     @routeCode(3301)
     def doDial(self, tpack):
         self.sendATcmd(tpack, [tpack.body['cid'], 1, tpack.body['seq'], 0x00, 5, "ATD<6>;\r", tpack.body['oth']])
@@ -31,7 +25,7 @@ class PhoneMo(SHProtocol):
 
     @routeCode(3501)
     def doTalking(self, tpack):
-        if self._mo == None: raise Exception(401)
+        if not self._mo: raise Exception(401)
         tok = uuid.uuid1().hex
         srv = Gol().getVoiceTunnel()
         d = User.findByLogin(tpack.body["oth"])
@@ -41,7 +35,7 @@ class PhoneMo(SHProtocol):
 
     @routeCode(3502)
     def doTalkingToChip(self, tpack):
-        if self._mo == None: raise Exception(401)
+        if not self._mo: raise Exception(401)
         tok = uuid.uuid1().hex
         srv = Gol().getCallTunnel()
         host, port = srv.split(':')
@@ -51,7 +45,7 @@ class PhoneMo(SHProtocol):
         return d
 
     def sendATcmd(self, tpack, body):
-        if self._mo == None: raise Exception(401)
+        if not self._mo: raise Exception(401)
         d = self._mo.chip(tpack.body['cid'])
         d.addCallback(lambda c: self.sendToChip(c, 1001, body, tpack.id))
         return d

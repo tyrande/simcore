@@ -33,9 +33,17 @@ class ChipMo(SHProtocol):
 
         (mod, imei, imsi, bid) = tpack.body[0].split('\n')
         c = self.setMo(Chip(imei))
-        d = c.login(imsi, bid, self._session, self.factory.channel, mod)
-        d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
+        d = c.login(imsi, bid, self._session, self.factory.channel, mod, '')
+        # d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
+        d.addCallback(lambda at: self.cnum(tpack, at))
         return d
+
+    def cnum(self, tpack, at):
+        self.returnDPack(200, [tpack.body[0], ''], tpack.id)
+        at = 0
+        if at == 0 and self._mo['mod'] != 'SI3050':
+            self.sendTPack(1001, [self._mo.id, 6, 0, 0x00, 5, 'AT+<6>\r', 'CNUM'])
+
 
     @routeCode(1001)
     def recvATcmd(self, dpack):
@@ -52,7 +60,7 @@ class ChipMo(SHProtocol):
         #       cmd 9 :     Calling status return command
         #   see Wiki for more: http://192.168.6.66/projects/sim/wiki/AT%E5%91%BD%E4%BB%A4%E5%8D%8F%E8%AE%AE
 
-        if self._mo == None: raise Exception(401)
+        if not self._mo: raise Exception(401)
         if dpack._TPack.body[1] == 1:
             d = self._mo.startCall(dpack._TPack.body[2], dpack._PPack.senderId)
             d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
@@ -61,6 +69,14 @@ class ChipMo(SHProtocol):
         elif dpack._TPack.body[1] == 3:
             d = self._mo.answerCall(dpack._TPack.body[2], dpack._PPack.senderId)
             d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
+        elif dpack._TPack.body[1] == 6:
+            self._debug_(dpack._TPack.body, 'AT Send')
+            d = None
+            if dpack._TPack.body[6] == 'CNUM':
+                self._debug_(dpack.body, 'AT Recv')
+                match = re.match('\+CNUM: ".*","([^"]+)"', dpack.body[2])
+                if match:
+                    d = self._mo.setNum(match.group[1])
         else:
             d = None
         return d
@@ -87,7 +103,8 @@ class ChipMo(SHProtocol):
         #
         #   tpack.body[2] Calling Sequence id
 
-        # if self._mo.id != tpack.body[0]: raise Exception(603)
+        if not self._mo: raise Exception(401)
+        if self._mo.id != tpack.body[0]: raise Exception(603)
         if tpack.body[1] == 200:
             cb = self.parseCLCC(tpack.body[6])
             d = cb(tpack.body[2]) if cb else None
@@ -97,6 +114,7 @@ class ChipMo(SHProtocol):
 
     @routeCode(2002)
     def recvCardInfo(self, tpack):
+        if not self._mo: raise Exception(401)
         d = self._mo.onl()
         d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
         return d
