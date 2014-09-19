@@ -117,10 +117,6 @@ class User(RedisHash):
     # User Model inherit from RedisHash
     #   User has many Boxes, user can control the chips in Box only if the Box pair to User
     #   @key id:            uuid.uuid1() generated, unique in whole system
-    #   @key atk:  str      Apple push Token
-    #   @key rol:  str      Current device Role
-    #                           '20' -> 0x20  phone iOS
-    #                           '21' -> 0x21  phone Android
     #
     # Redis Key
     #   User:<id>:info                  hash
@@ -129,6 +125,7 @@ class User(RedisHash):
     #   User:<id>:Cards                 hash
     #   User:<id>:oths                  sortset
     #   User:<id>:oth:<oth>:voices      sortset
+    #   User:<id>:atk                   hash
 
     def newsHeart(self, ses, chn):
         _script = """
@@ -247,7 +244,7 @@ class Chip(RedisHash):
             for k, v in pairs(us) do
                 redis.call('hset', 'User:'..v..':info', 'bv', KEYS[8])
             end
-            local ni = redis.call('hexists', 'Card:'..KEYS[2]..':info', 'imsi')
+            local ni = redis.call('hexists', 'Card:'..KEYS[2]..':info', 'num')
             if ni == 0 then redis.call('hmset', 'Card:'..KEYS[2]..':info', 'imsi', KEYS[2], 'mod', KEYS[6], 'icc', KEYS[7]) end
             return ni
         """
@@ -269,16 +266,19 @@ class Chip(RedisHash):
             redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', '', 'oth', KEYS[5], 'typ', '1', 'stt', '1', 'st', KEYS[6])
             redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
             local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
-            local atks = {}
             local ses = {}
+            local atk = ''
             for k, v in pairs(ids) do
-                table.insert(atks, redis.call('hmget', 'User:'..v..':info', 'atk', 'rol'))
+                for m,n in pairs(redis.call('hvals', 'User:'..v..':atk')) do
+                    atk = atk..n..','
+                end
                 redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[6] - 5*60)
                 for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
                     table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
                 end
             end
-            return {ses, atks}
+            if atk ~= '' then redis.call('rpush', 'System:Ring', atk..KEYS[5]..','..KEYS[6]) end
+            return ses
         """
         d = self._redis.eval(_script, [clid, self.get('cdid', ''), self.id, self['bid'], clid[0:-16], int(time.time())])
         d.addCallback(lambda sa: (sa, clid))
@@ -292,13 +292,12 @@ class Chip(RedisHash):
         if not clid: return None 
         _script = """
             local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
-            local atks = {redis.call('hmget', 'User:'..uid..':info', 'atk', 'rol')}
             local ses = {}
             redis.call('zremrangebyscore', 'User:'..uid..':news', 0, KEYS[2] - 5*60)
             for k,v in pairs(redis.call('zrange', 'User:'..uid..':news', 0, -1)) do
                 table.insert(ses, {v,redis.call('hget', 'Session:'..v..':info', 'chn')})
             end
-            return {ses, atks}
+            return ses
         """
         d = self._redis.eval(_script, [clid, int(time.time())])
         d.addCallback(lambda sa: (sa, clid))
@@ -314,16 +313,14 @@ class Chip(RedisHash):
             local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
             local ids = {uid}
             if uid == '' then ids = redis.call('zrange', 'Box:'..KEYS[5]..':Users', 0, -1) end
-            local atks = {}
             local ses = {}
             for k, v in pairs(ids) do
-                table.insert(atks, redis.call('hmget', 'User:'..v..':info', 'atk', 'rol'))
                 redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[3] - 5*60)
                 for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
                     table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
                 end
             end
-            return {ses, atks}
+            return ses
         """
         d = self._redis.eval(_script, [clid, 0, int(time.time()), self.id, self['bid']])
         d.addCallback(lambda sa: (sa, clid))

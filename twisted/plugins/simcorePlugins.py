@@ -73,7 +73,6 @@ class ServiceMaker(object):
         _srvs.setServiceParent = wrap_setServiceParent(_srvs.setServiceParent, options)
         _srvs.setServiceParent(application)
         
-        Gol().setAPNs("%s/%s/ca/aps_development.pem"%(options["pools"], options["env"]), "%s/%s/ca/simhub_nopass.pem"%(options["pools"], options["env"]))
         return _srvs
 
     # def initLog(self, app, env, logf):

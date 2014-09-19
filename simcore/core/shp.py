@@ -9,7 +9,6 @@ from simcore.core.database import SrPushdb
 from simcore.core.gol import Gol
 from simcore.core.models import Session
 import simcore.libs.txredisapi as redis
-from apns import Payload
 import struct, msgpack, uuid, time, random
 
 class PackBase(object):
@@ -133,15 +132,19 @@ class SHProtocol(protocol.Protocol):
 
     def dataReceived(self, data):
         self._recvBuf += data
-        while len(self._recvBuf) > 4:
+        bufLen = len(self._recvBuf)
+        while bufLen > 4:
             self._recvBuf, pack = packLoads(self._recvBuf)
             if pack: self.recvPack(pack)
+            if len(self._recvBuf) == bufLen: break
+            bufLen = len(self._recvBuf)
 
     def recvPack(self, pack):
         if type(pack) == DPack:
             tp = self.findWaitingTPack(pack.id)
             if tp: pack.peerToTPack(tp)
-            else: self.errorRoutePack(500, pack)
+            # else: self.errorRoutePack(500, pack)
+            else: raise Exception(400) 
         
         Gol()._log_('FR', self, pack) # -*- Log -*- #
         d = defer.Deferred()
@@ -213,6 +216,7 @@ class SHProtocol(protocol.Protocol):
 
     def sendTPack(self, rt, body):
         pack = TPack(self.newPackId(), rt, self._session.id, body)
+        self.addTPackWaiting(pack)
         return self.send(pack)
 
     def returnDPack(self, rt, body, tpid):
@@ -233,40 +237,11 @@ class SHProtocol(protocol.Protocol):
         else:
             return self._redis.publish(channel, ppack.dump())
 
-    def notiToUsers(self, sess, atks, rc, body, withAPNs=False, msg='Calling..'):
+    def sendNews(self, sess, rc, body):
         _ss = {}
         [ _ss.update({s[0] : s[1]}) for s in sess ]
         for sid, chn in _ss.items():
             self.passToSck(chn, sid + 'news', '', 0x00, rc, body)
-        if withAPNs:
-            _as = {}
-            [ _as.update({a[0] : a[1]}) for a in atks ]
-            for atk, rol in _as.items():
-                if atk != '' and rol == '20': self.sendNotiToApple(atk, msg)
-        # [ self.notiToUser(u, rc, body, withAPNs, msg) for u in us ]
-
-    # def notiToUser(self, u, rc, body, withAPNs=False, msg='Calling...'):
-    #     # Push notice through user's news socket
-    #     #   @param u:               User to push notice
-    #     #   @param rc:              Route code for pushing package
-    #     #   @param body:            Body for pushing package
-    #     #   @param withAPNs:        Swith for pushing through Apple APNs, Only Ringing and SMS Receive need swith to True
-    #     #   @param msg:             Message for pushing through Apple APNs to User
-    #     #
-    #     #   If user's phone system is iOS, also push notice through Apple's notice channel
-    #     #   -*- TODO -*- : 1. Support user has mutiple devices
-    #     #                  2. When push through socket fail, use the Apple way
-
-    #     if not u: return None
-    #     d = u.newsSessions()
-    #     d.addCallback(lambda ses: [ self.passToSck(s.get('chn', None), s.id + 'news', '', 0x00, rc, body) for s in ses ])
-    #     if withAPNs and u.get('rol', None) == '20' and u.get('atk', None):
-    #         d.addCallback(lambda x: self.sendNotiToApple(u['atk'], msg))
-    #     return d
-
-    def sendNotiToApple(self, pushTok, note):
-        payload = Payload(alert=note, sound="default", badge=1)
-        Gol().apns.gateway_server.send_notification(pushTok, payload)
 
     def finishRoutePack(self, pack):
         pass
@@ -280,7 +255,10 @@ class SHProtocol(protocol.Protocol):
             Gol()._log_('ER', self, None, repr(failure.getBriefTraceback().replace('\n', ' ')))
 
     def addTPackWaiting(self, pack):
+        # Waiting DPack Timeout 5 seconds
+        
         self._TPackWaitPeer[pack.id] = pack
+        reactor.callLater(5, self.findWaitingTPack, pack.id)
 
     def findWaitingTPack(self, packid):
         tp = self._TPackWaitPeer.get(packid, None)

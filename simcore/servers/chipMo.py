@@ -31,19 +31,17 @@ class ChipMo(SHProtocol):
     def doLogin(self, tpack):
         # -*- TODO -*- : Use RSA encrypt package body
 
-        (mod, imei, imsi, bid) = tpack.body[0].split('\n')
+        (mod, imei, imsi, iccid, bid) = tpack.body[0].split('\n')
         c = self.setMo(Chip(imei))
-        d = c.login(imsi, bid, self._session, self.factory.channel, mod, '')
+        d = c.login(imsi, bid, self._session, self.factory.channel, mod, iccid)
         # d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
         d.addCallback(lambda at: self.cnum(tpack, at))
         return d
 
     def cnum(self, tpack, at):
         self.returnDPack(200, [tpack.body[0], ''], tpack.id)
-        at = 0
         if at == 0 and self._mo['mod'] != 'SI3050':
-            self.sendTPack(1001, [self._mo.id, 6, 0, 0x00, 5, 'AT+<6>\r', 'CNUM'])
-
+            self.sendTPack(1001, [self._mo.id, 6, '0', 0x00, 5, 'AT+<6>\r', 'CNUM'])
 
     @routeCode(1001)
     def recvATcmd(self, dpack):
@@ -70,13 +68,14 @@ class ChipMo(SHProtocol):
             d = self._mo.answerCall(dpack._TPack.body[2], dpack._PPack.senderId)
             d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
         elif dpack._TPack.body[1] == 6:
-            self._debug_(dpack._TPack.body, 'AT Send')
+            # self._debug_(dpack._TPack.body, 'AT Send') # -*- Debug -*- #
             d = None
             if dpack._TPack.body[6] == 'CNUM':
-                self._debug_(dpack.body, 'AT Recv')
-                match = re.match('\+CNUM: ".*","([^"]+)"', dpack.body[2])
+                # self._debug_(dpack.body, 'AT Recv') # -*- Debug -*- #
+                match = re.search('\+CNUM: ".*","([^"]+)"', dpack.body[2])
                 if match:
-                    d = self._mo.setNum(match.group[1])
+                    # self._debug_(match.group(1), 'CNUM') # -*- Debug -*- #
+                    d = self._mo.setNum(match.group(1))
         else:
             d = None
         return d
@@ -129,22 +128,22 @@ class ChipMo(SHProtocol):
             if match: return pr[2]
         return None
 
-    def endCall(self, seq):
-        d = self._mo.endCall()
-        d.addCallback(lambda sa: self.notiToUsers(sa[0][0], sa[0][1], 4004, { 'cid' : self._mo.id, 'seq' : sa[1], 'stt' : -1 } ))
-        d.addCallback(lambda x: None)
-        return d
-
     def ringing(self, seq):
         d = self._mo.ringing(seq)
-        d.addCallback(lambda sa: self.notiToUsers(sa[0][0], sa[0][1], 4001, { 'cid' : self._mo.id, 'oth' : seq[0:-16], 'seq' : seq, 'tim' : int(time.time()) }, True, u'%s \u6765\u7535'%seq[0:-16] ))
+        d.addCallback(lambda sa: self.sendNews(sa[0], 4001, { 'cid' : self._mo.id, 'oth' : seq[0:-16], 'seq' : seq, 'tim' : int(time.time()) } ))
         d.addCallback(lambda x: None)
         return d
 
     def changeCall(self, seq):
         # d = self._mo.callingUser()
         d = self._mo.changeCall()
-        d.addCallback(lambda sa: self.notiToUsers(sa[0][0], sa[0][1], 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
+        d.addCallback(lambda sa: self.sendNews(sa[0], 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
+        d.addCallback(lambda x: None)
+        return d
+
+    def endCall(self, seq):
+        d = self._mo.endCall()
+        d.addCallback(lambda sa: self.sendNews(sa[0], 4004, { 'cid' : self._mo.id, 'seq' : sa[1], 'stt' : -1 } ))
         d.addCallback(lambda x: None)
         return d
 

@@ -17,13 +17,6 @@ class PhoneNoti(SHProtocol):
         d.addCallback(lambda cs: self.returnDPack(200, cs, tpack.id))
         return d
 
-    @routeCode(402)
-    def doPushNews(self, tpack):
-        if not self._mo: raise Exception(401)
-        d = self._mo.save({ 'atk' : tpack.body[0]})
-        d.addCallback(lambda x: self.returnDPack(200, [], tpack.id))
-        return d
-
     @routeCode(4001)
     def recvRing(self, dpack): return None
 

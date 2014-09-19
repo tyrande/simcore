@@ -3,7 +3,6 @@
 # MainTained by Alan
 # Contact: alan@sinosims.com
 
-from apns import APNs
 import random
 
 def raiseCode(code):
@@ -65,9 +64,6 @@ class Gol(object):
     def delSck(self, sid, sckType=''):
         _sckId = "%s%s"%(sid, sckType)
         if _sckId in self.sckPool: del self.sckPool[_sckId]
-
-    def setAPNs(self, cert_file, key_file):
-        self.apns = APNs(use_sandbox=True, cert_file=cert_file, key_file=key_file)
 
     def _log_(self, act, socket, pack=None, str=None):
         # Log simhub action
