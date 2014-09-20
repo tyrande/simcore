@@ -139,13 +139,15 @@ class User(RedisHash):
                 cs = redis.call('zrange', 'Box:'..v..':Chips', 0, -1)
                 for p, q in pairs(cs) do
                     cll = redis.call('hget', 'Chip:'..q..':info', 'cll')
-                    c[p] = redis.call('hmget', 'Call:'..tostring(cll)..':info', 'uid', 'cpid', 'oth', 'id', 'st')
+                    c[p] = redis.call('hmget', 'Call:'..tostring(cll)..':info', 'uid', 'cpid', 'oth', 'id', 'st', 'ed')
                 end
             end
             return c
         """
         d = self._redis.eval(_script, [ses.id, chn, self.id, int(time.time())])
-        d.addCallback(lambda cls: [ {'cid' : c[1], 'oth' : c[2], 'seq' : c[3], 'tim' : int(c[4])} for c in cls if c[0] == '' and (time.time() - int(c[4])) < 60 ])
+        d.addCallback(lambda cls: [ {'cid' : c[1], 'oth' : c[2], 'seq' : c[3], 'tim' : int(c[4])} 
+                                    for c in cls 
+                                    if c[0] == '' and (not c[5]) and (time.time() - int(c[4])) < 60 ])
         return d
 
     def addNewsSession(self, sid):
