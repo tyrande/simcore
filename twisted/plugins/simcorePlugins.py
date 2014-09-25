@@ -93,8 +93,9 @@ class ServiceMaker(object):
         from simcore.servers.chipMo import BoxMoFactory, ChipMoFactory
         from simcore.servers.phoneMo import PhoneMoFactory
         from simcore.servers.phoneNoti import PhoneNotiFactory
+        from simcore.servers.tools import ToolsFactory
 
-        _loadServ = [[BoxMoFactory, 8901], [ChipMoFactory, 8902], [PhoneMoFactory, 9901], [PhoneNotiFactory, 9902]]
+        _loadServ = [[BoxMoFactory, 8901], [ChipMoFactory, 8902], [PhoneMoFactory, 9901], [PhoneNotiFactory, 9902], [ToolsFactory, 9898]]
         [ internet.TCPServer(srv[1], srv[0](chn)).setServiceParent(srvs) for srv in _loadServ ]
         
         internet.TCPClient(SrPushdb().host, SrPushdb().port, RedisSubFactory(chn)).setServiceParent(srvs)

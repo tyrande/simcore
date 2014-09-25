@@ -4,7 +4,7 @@
 # Contact: alan@sinosims.com
 
 from simcore.core.shp import SHProtocol, SHPFactory, routeCode
-from simcore.core.models import User, Chip, Box, Call
+from simcore.core.models import User, Chip, Box, Call, Sms
 import time, re
 
 class BoxMo(SHProtocol):
@@ -31,9 +31,10 @@ class ChipMo(SHProtocol):
     def doLogin(self, tpack):
         # -*- TODO -*- : Use RSA encrypt package body
 
-        (mod, imei, imsi, iccid, bid) = tpack.body[0].split('\n')
+        (mod, imei, imsi, iccid, bid, lvl) = tpack.body
+        lvl = lvl.replace('/dev/', '').replace('/', '_')
         c = self.setMo(Chip(imei))
-        d = c.login(imsi, bid, self._session, self.factory.channel, mod, iccid)
+        d = c.login(imsi, bid, self._session, self.factory.channel, mod, iccid, lvl)
         # d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
         d.addCallback(lambda at: self.cnum(tpack, at))
         return d
@@ -67,14 +68,14 @@ class ChipMo(SHProtocol):
         elif dpack._TPack.body[1] == 3:
             d = self._mo.answerCall(dpack._TPack.body[2], dpack._PPack.senderId)
             d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
+        elif dpack._TPack.body[1] == 4:
+            d = self._mo.sendSMSOver(dpack._TPack.body[2])
+            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, None))
         elif dpack._TPack.body[1] == 6:
-            # self._debug_(dpack._TPack.body, 'AT Send') # -*- Debug -*- #
             d = None
             if dpack._TPack.body[6] == 'CNUM':
-                # self._debug_(dpack.body, 'AT Recv') # -*- Debug -*- #
                 match = re.search('\+CNUM: ".*","([^"]+)"', dpack.body[2])
                 if match:
-                    # self._debug_(match.group(1), 'CNUM') # -*- Debug -*- #
                     d = self._mo.setNum(match.group(1))
         else:
             d = None
@@ -107,6 +108,11 @@ class ChipMo(SHProtocol):
         if tpack.body[1] == 200:
             cb = self.parseCLCC(tpack.body[6])
             d = cb(tpack.body[2]) if cb else None
+        elif tpack.body[1] == 201:
+            match = re.match('\+CMGL:.*\s+([0-9A-F]*)\s+', tpack.body[6])
+            if not match: return None
+            d = self._mo.smsing(match.group(1))
+            d.addCallback(lambda sa: self.sendNews(sa[0], 4002, { 'cid' : self._mo.id, 'oth' : sa[1][0], 'msg' : sa[1][1], 'tim' : sa[1][2] }))
         else:
             d = None
         return d
@@ -130,6 +136,7 @@ class ChipMo(SHProtocol):
 
     def ringing(self, seq):
         d = self._mo.ringing(seq)
+        if not d: return None
         d.addCallback(lambda sa: self.sendNews(sa[0], 4001, { 'cid' : self._mo.id, 'oth' : seq[0:-16], 'seq' : seq, 'tim' : int(time.time()) } ))
         d.addCallback(lambda x: None)
         return d
@@ -137,12 +144,14 @@ class ChipMo(SHProtocol):
     def changeCall(self, seq):
         # d = self._mo.callingUser()
         d = self._mo.changeCall()
+        if not d: return None
         d.addCallback(lambda sa: self.sendNews(sa[0], 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
         d.addCallback(lambda x: None)
         return d
 
     def endCall(self, seq):
         d = self._mo.endCall()
+        if not d: return None
         d.addCallback(lambda sa: self.sendNews(sa[0], 4004, { 'cid' : self._mo.id, 'seq' : sa[1], 'stt' : -1 } ))
         d.addCallback(lambda x: None)
         return d

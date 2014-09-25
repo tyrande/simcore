@@ -115,6 +115,7 @@ class SHProtocol(protocol.Protocol):
     #   @attr _pckId:           Use to generate new TPack id, start from 1000 because Phone and Card generate TPack id from 1
     
     _redis = SrPushdb().redisPool
+    _heart = 5*60
 
     def connectionMade(self):
         Gol()._log_('CM', self, None, '>> %s'%self.__class__.__name__) # -*- Log -*- #
@@ -124,12 +125,13 @@ class SHProtocol(protocol.Protocol):
         self._session = None
         self._mo = None
         self._TPackWaitPeer = {}
+        self._lastRecvAt = time.time()
+        reactor.callLater(self._heart, self.closeConnection)
 
     def connectionLost(self, reason):
         Gol()._log_('CL', self, None, '<< %s'%self.__class__.__name__) # -*- Log -*- #
         return Gol().delSck(self._session.id, self.factory._sckType) if self._session else defer.Deferred()
         
-
     def dataReceived(self, data):
         self._recvBuf += data
         bufLen = len(self._recvBuf)
@@ -140,6 +142,8 @@ class SHProtocol(protocol.Protocol):
             bufLen = len(self._recvBuf)
 
     def recvPack(self, pack):
+        if Gol().stop: return
+        self._lastRecvAt = time.time()
         if type(pack) == DPack:
             tp = self.findWaitingTPack(pack.id)
             if tp: pack.peerToTPack(tp)
@@ -236,12 +240,12 @@ class SHProtocol(protocol.Protocol):
                 return sck.processPPack(ppack)
         else:
             return self._redis.publish(channel, ppack.dump())
-
+            
     def sendNews(self, sess, rc, body):
         _ss = {}
         [ _ss.update({s[0] : s[1]}) for s in sess ]
         for sid, chn in _ss.items():
-            self.passToSck(chn, sid + 'news', '', 0x00, rc, body)
+            self.passToSck(chn, sid + 'news', -1, 0x00, rc, body)
 
     def finishRoutePack(self, pack):
         pass
@@ -255,18 +259,30 @@ class SHProtocol(protocol.Protocol):
             Gol()._log_('ER', self, None, repr(failure.getBriefTraceback().replace('\n', ' ')))
 
     def addTPackWaiting(self, pack):
-        # Waiting DPack Timeout 5 seconds
+        # Waiting DPack Timeout 30 seconds
         
         self._TPackWaitPeer[pack.id] = pack
-        reactor.callLater(5, self.findWaitingTPack, pack.id)
+        reactor.callLater(30, self.waitingTPackTimeout, pack.id)
 
     def findWaitingTPack(self, packid):
         tp = self._TPackWaitPeer.get(packid, None)
-        if tp: del self._TPackWaitPeer[packid]
+        if tp: 
+            del self._TPackWaitPeer[packid]
         return tp
+
+    def waitingTPackTimeout(self, packid):
+        tp = self.findWaitingTPack(packid)
+        if tp and tp._PPack and tp._PPack.packId > 0:
+            self.passToSck(tp._PPack.senderChannel, tp._PPack.senderSid, tp._PPack.packId, 0x80, 721, None)
 
     def findSck(self, SckId):
         return Gol().findSck(SckId)
+
+    def closeConnection(self, force=False):
+        if force or (time.time() - self._lastRecvAt > self._heart):
+            self.transport.loseConnection()
+        else:
+            reactor.callLater(self._heart, self.closeConnection)
 
     def _debug_(self, obj, msg=''):
         print '---- %s ----'%msg, repr(obj)

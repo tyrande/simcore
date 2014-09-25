@@ -23,7 +23,7 @@ class Gol(object):
         return cls._instance
 
     def init(self, env):
-        self.env, self.sckPool, self.routePool, self.callTunnels = env, {}, {}, []
+        self.env, self.sckPool, self.routePool, self.callTunnels, self.stop = env, {}, {}, [], False
 
     # Control Route Pool
     #   @param sckCls:          Socket Class Name
