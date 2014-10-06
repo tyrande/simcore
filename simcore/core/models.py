@@ -111,7 +111,7 @@ class Session(RedisHash):
     #   @key bv:   int      Box Status change timestemp
     #
     # Redis Key
-    #   Session:<id>:info      hash
+    #   Session:<id>:info      hash     @keys
     
     _infoTX = 604800
 
@@ -121,17 +121,22 @@ class User(RedisHash):
     #   @key id:            uuid.uuid1() generated, unique in whole system
     #
     # Redis Key
-    #   User:<id>:info                  hash
-    #   User:<id>:news                  sortset
-    #   User:<id>:Boxes                 sortset
-    #   User:<id>:Cards                 hash
-    #   User:<id>:oths                  sortset
+    #   User:<id>:info                  hash        @keys
+    #   User:<id>:news                  sortset     timestamp : news session id
+    #   User:<id>:Boxes                 sortset     timestamp : box id
+    #   User:<id>:Cards                 hash        cardIMSI : json.dumps({'clr' : 'FFFFFF', 'icn' : '0~29', 'name' : 'My Card'})
+    #   User:<id>:oths                  sortset     
     #   User:<id>:oth:<oth>:voices      sortset
     #   User:<id>:othsms                sortset
     #   User:<id>:othsms:<oth>:sms      sortset
-    #   User:<id>:atk                   hash
+    #   User:<id>:atk                   hash        phoneIMEI : phoneATK
 
     def newsHeart(self, ses, chn):
+        # Called by PhoneNoti 401
+        #   1   Set news Session info
+        #   2   Add news Session to User
+        #   3   Get current Calling
+
         _script = """
             redis.call('hset', 'Session:'..KEYS[1]..':info', 'chn', KEYS[2])
             redis.call('zadd', 'User:'..KEYS[3]..':news', KEYS[4], KEYS[1])
@@ -154,13 +159,14 @@ class User(RedisHash):
                                     if c[0] == '' and (not c[6]) and (time.time() - int(c[5])) < 60 ])
         return d
 
-    def addNewsSession(self, sid):
-        d = self._redis.zadd("User:%s:news"%self.id, int(time.time()), sid)
-        d.addCallback(lambda x: self)
-        return d
+    # def addNewsSession(self, sid):
+    #     d = self._redis.zadd("User:%s:news"%self.id, int(time.time()), sid)
+    #     d.addCallback(lambda x: self)
+    #     return d
 
     def newsSessions(self):
         # Remove dead sessions which scores are 5 minutes ago
+
         d = self._redis.zremrangebyscore("User:%s:news"%self.id, 0, int(time.time()) - 5*60)
         d.addCallback(lambda x: Session.findAllByKey("User:%s:news"%self.id))
         return d
@@ -205,6 +211,9 @@ class User(RedisHash):
         return d
 
     def chip(self, cpid):
+        # return chip info hash if user has this chip 
+        # raise 603 if user don't have this chip
+
         _script = """
             local bid = redis.call('hget', 'Chip:'..KEYS[1]..':info', 'bid')
             local sc = redis.call('zscore', 'User:'..KEYS[2]..':Boxes', bid)
@@ -219,6 +228,13 @@ class User(RedisHash):
         return d
 
     def sendSMS(self, cpid, oth, msg):
+        # Called by PhoneMo 3401
+        #   1   Pack SMS to pdu string
+        #   2   Format other number
+        #   3   Gen new SMS id
+        #   4   raise 603 if user don't have this chip
+        #   5   Set Sms info
+
         sms = SmsSubmit(oth, msg)
         pdu = sms.to_pdu()[0]
         now = int(time.time()*1000)
@@ -258,9 +274,18 @@ class Chip(RedisHash):
     #   @key cll:       str     Current Call id, Key don't exist or Value is '' if no current call
     #
     # Redis key
-    #   Chip:<id>:info          hash
+    #   Chip:<id>:info          hash        @keys
 
     def login(self, imsi, bid, ses, chn, mod, icc, lvl):
+        # Called by ChipMo 102
+        #   1   Set Chip info
+        #   2   Add Chip to Box
+        #   3   Change Session info:Chip
+        #   4   Change User info:bv
+        #   5   Set Card to User
+        #   6   Find Card number
+        #   7   Set Card info
+
         self.update({ 'cdid' : imsi, 'bid' : bid, 'sid' : ses.id, 'chn' : chn, 'mod' : mod, 'lvl' : lvl })
         ses['Chip'] = self.id
         isph = {'00' : 11, '02' : 11, '07' : 11, '01' : 12, '06' : 12, '20' : 12, '03' : 13, '05' : 13}
@@ -281,6 +306,10 @@ class Chip(RedisHash):
         return self._redis.eval(_script, [self.id, imsi, bid, ses.id, chn, mod, icc, isp, lvl, int(time.time())])
 
     def startCall(self, clid, uid):
+        # Called by ChipMo 1001 Dial return ok
+        #   1   Set new Calling
+        #   2   Set Chip info:cll
+
         self['cll'] = clid
         oth = clid[0:-16]
         (fnum, inum, loc) = phoneNum.loads(oth)
@@ -293,6 +322,14 @@ class Chip(RedisHash):
         return d
 
     def ringing(self, clid):
+        # Calling by ChipMo 2001:4001
+        #   1   Set new Calling
+        #   2   Set Chip info:cll
+        #   3   Find Users atk which should push ring
+        #   4   Remove Timeout News Session
+        #   5   Find News Session which should push ring
+        #   6   Add Calling to Asynchronous System:Ring list
+
         self['cll'] = clid
         oth = clid[0:-16]
         (fnum, inum, loc) = phoneNum.loads(oth)
@@ -322,6 +359,11 @@ class Chip(RedisHash):
         return Call(clid).save({ 'uid' : uid })
 
     def changeCall(self):
+        # Calling by ChipMo 2001:4004
+        #   1   Find User who should be noticed Current Calling status changing
+        #   2   Remove Timeout News Session
+        #   3   Find News Session which should be noticed Current Calling status changing
+
         clid = self.get('cll', None)
         if not clid: return None 
         _script = """
@@ -338,6 +380,14 @@ class Chip(RedisHash):
         return d
 
     def endCall(self):
+        # Calling by ChipMo 2001:4004
+        #   1   Change Calling info:stt ed
+        #   2   Del Chip info:cll
+        #   3   Add Calling to Asynchronous System:Calls list
+        #   4   Find User who should be noticed Current Calling ended
+        #   5   Remove Timeout News Session
+        #   6   Find News Session which should be noticed Current Calling ended
+
         clid = self.get('cll', None)
         if not clid: return None
         _script = """
@@ -371,7 +421,17 @@ class Chip(RedisHash):
         return self._redis.eval(_script, [smsid, int(time.time())])
 
     def smsing(self, pdu):
-        smsid = uuid.uuid1().hex
+        # Called by ChipMo 2001:4002
+        #   1   Unpack SMS from pdu string
+        #   2   Format other number
+        #   3   Gen new SMS id
+        #   4   Set Sms info
+        #   5   Add Sms to Asynchronous System:Sms list
+        #   6   Find Users atk which should push smsing
+        #   7   Remove Timeout News Session
+        #   8   Find News Session which should push smsing
+        #   9   Add Calling to Asynchronous System:Smsing smsing  
+
         sms = SmsDeliver(pdu).data
         tim = int(time.mktime(sms['date'].timetuple()))
         now = int(time.time()*1000)
@@ -405,6 +465,10 @@ class Chip(RedisHash):
         return Box(self['bid']).users()
 
     def onl(self):
+        # Called by ChipMo 2002
+        #   1   Change Box Chips Timestamp
+        #   2   Delay Session Redis expire time
+
         _script = """
             redis.call('zadd', 'Box:'..KEYS[1]..':Chips', KEYS[2], KEYS[3])
             redis.call('expire', 'Session:'..KEYS[4]..':info', KEYS[5])
@@ -414,22 +478,25 @@ class Chip(RedisHash):
     def call(self):
         pass
 
-    def callingUser(self):
-        cll = self.get('cll', None)
-        if not cll: return None 
-        _script = """
-            local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
-            return redis.call('hgetall', 'User:'..uid..':info')
-        """
-        d = self._redis.eval(_script, [cll])
-        d.addCallback(lambda info: User.reloadFromInfo(dict(zip(info[::2], info[1::2]))))
-        return d
+    # def callingUser(self):
+    #     cll = self.get('cll', None)
+    #     if not cll: return None 
+    #     _script = """
+    #         local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
+    #         return redis.call('hgetall', 'User:'..uid..':info')
+    #     """
+    #     d = self._redis.eval(_script, [cll])
+    #     d.addCallback(lambda info: User.reloadFromInfo(dict(zip(info[::2], info[1::2]))))
+    #     return d
 
     def setNum(self, num):
-        return self._redis.hset('Card:%s:info'%self['cdid'], 'num', num)
+        (fnum, inum, loc) = phoneNum.loads(num)
+        return self._redis.hmset('Card:%s:info'%self['cdid'], 'num', num, 'loc', loc, 'inum', inum)
 
     def fineOth(self, oth):
-        if self['mod'] == 'SI3050': oth = oth + "#"
+        # Add "#" to the end of Other number through SI3050
+
+        if self['mod'] == 'SI3050': oth = oth.replace('+86', '') + "#"
         return (self, oth)
 
 class Box(RedisHash):
@@ -437,11 +504,22 @@ class Box(RedisHash):
     #   @key id:        str     IMEI of the Box, unique in whole system
     #   @key set:       int     The Box is in the setting mode or not, 0 means not in setting mode, 1 means in
     #   @key onl:       int     Box last http connection timestemp
+    #   @key name:      str     Box name user for development and test
     #
     # Redis key
-    #   Box:<id>:info           hash
-    #   Box:<id>:Users          sortset
-    #   Box:<id>:Chips          sortset
+    #   Box:<id>:info           hash            @keys
+    #   Box:<id>:Users          sortset         timestamp : user id
+    #   Box:<id>:Chips          sortset         timestamp : chip id
+    #   System:Box:version      sortset         timestamp : version id
+    #   Box:version:<vid>       hash 
+    #       id          str         Version id, uuid.uuid4().hex, unique in whole system
+    #       ver         str         Version num, 0.1.1
+    #       lvl         int         0 user premission update, 1 force update
+    #       typ         str         Type of the version, hotfix, feature, update
+    #       pha         str         Phase of the version, test, inline, online 
+    #       desc        str         Description of the version 
+    #       tm          int         Download times
+    #       pc          str         Premission Code for update
 
     def users(self):
         return User.findAllByKey("Box:%s:Users"%self.id)
@@ -467,19 +545,22 @@ class Card(RedisHash):
     #   @key id:        str     IMSI of the Card
     #   @key icc:       str     ICCID of the Card
     #   @key num:       str     Number of the Card
+    #   @key inum:      str     Core number of the Card
     #   @key mod:       str     MG2639, MC8332, SI3050
+    #   @key loc:       str     Location of the Card
+    #   @key isp:       int     0 unknown, 1 PSTN, 11 China Mobile, 12 China Union, 13 China Telecom
     #
-    #   ISP(Internet Service Providers) name: ICCID[0:6]
-    #   ISP Location:                         ICCID[9:10]
+    #   ISP(Internet Service Providers) name: IMSI[3:5]
+    #   ISP Location:                         simisp.phoneNum.loads(num)[2]
     #
     # Redis key
-    #   Card:<id>:info          hash
-    #   Card:City               hash
+    #   Card:<id>:info          hash            @keys
+    
     pass
 
 class Call(RedisHash):
     # Call Model inherit from RedisHash
-    #   @key id:        str     Sequence id generated by phone or chip
+    #   @key id:        str     Sequence id generated by phone or chip, "%s%d%d"%(inum[-20:], int(time.time()), random.randrange(100, 999))
     #   @key cdid:      str     ID of SIM Card, None if PSTN
     #   @key cpid:      str     ID of the Chip
     #   @key bid:       str     ID of the Box which contains the Chip
@@ -495,13 +576,15 @@ class Call(RedisHash):
     #   @key ed:        int     Ending Timestamp
     #
     # Redis key
-    #   Call:<id>:info          hash
+    #   Call:<id>:info          hash            @keys
+    #   System:Calls            list            ['id']
+    #   System:Ring             list            ['atk,atk,...,atk,oth,int(time.time()']
     
     _infoTX = 604800
 
 class Sms(RedisHash):
     # SMS model inherit from RedisHash
-    #   @key id:        str     uuid.uuid1().hex, unique in whole system
+    #   @key id:        str     "%s%d%d"%(inum[-20:], int(time.time()), random.randrange(100, 999)), unique in whole system
     #   @key cdid:      str     ID of SIM Card, None if PSTN
     #   @key cpid:      str     ID of the Chip
     #   @key bid:       str     ID of the Box which contains the Chip
@@ -514,5 +597,18 @@ class Sms(RedisHash):
     #   @key msg:       str     SMS content
     #   @key st:        str     SMS sending timestamp
     #   @key ed:        str     SMS sended timestamp, None if send fail
+    #
+    # Redis key
+    #   System:Sms              list            ['id']
+    #   System:Smsing           list            ['atk,atk,..,atk,id']
 
     _infoTX = 86400
+
+
+# class Phone(RedisHash):
+    # Phone model inherit from RedisHash
+    #   @key id:        str     IMEI of the Phone
+    #   @key uid:       str     Login User id of the Phoen
+    #
+    # Redis key
+    #   Phone:<id>:info          hash            @keys

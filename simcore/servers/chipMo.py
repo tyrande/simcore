@@ -60,9 +60,13 @@ class ChipMo(SHProtocol):
         #   see Wiki for more: http://192.168.6.66/projects/sim/wiki/AT%E5%91%BD%E4%BB%A4%E5%8D%8F%E8%AE%AE
 
         if not self._mo: raise Exception(401)
+        d = None
         if dpack._TPack.body[1] == 1:
-            d = self._mo.startCall(dpack._TPack.body[2], dpack._PPack.senderId)
-            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
+            if dpack.body[1] == 0:
+                d = self._mo.startCall(dpack._TPack.body[2], dpack._PPack.senderId)
+                d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
+            else:
+                self.returnToUser(dpack, dpack.apiRet, { 'stt' : -1 })
         elif dpack._TPack.body[1] == 2:
             d = self.returnToUser(dpack, dpack.apiRet, { 'stt' : 0 })
         elif dpack._TPack.body[1] == 3:
@@ -77,8 +81,8 @@ class ChipMo(SHProtocol):
                 match = re.search('\+CNUM: ".*","([^"]+)"', dpack.body[2])
                 if match:
                     d = self._mo.setNum(match.group(1))
-        else:
-            d = None
+            elif dpack._TPack.body[6] == 'VTS':
+                self.returnToUser(dpack, dpack.apiRet, None)
         return d
 
     @routeCode(1003)
@@ -142,7 +146,6 @@ class ChipMo(SHProtocol):
         return d
 
     def changeCall(self, seq):
-        # d = self._mo.callingUser()
         d = self._mo.changeCall()
         if not d: return None
         d.addCallback(lambda sa: self.sendNews(sa[0], 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
