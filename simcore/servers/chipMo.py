@@ -141,7 +141,7 @@ class ChipMo(SHProtocol):
     def ringing(self, seq):
         d = self._mo.ringing(seq)
         if not d: return None
-        d.addCallback(lambda sa: self.sendNews(sa[0], 4001, { 'cid' : self._mo.id, 'oth' : seq[0:-16], 'seq' : seq, 'tim' : int(time.time()) } ))
+        d.addCallback(lambda sa: self.sendNews(sa[0], 4001, { 'cid' : self._mo.id, 'oth' : sa[1], 'seq' : seq, 'loc' : sa[2], 'tim' : int(time.time()) } ))
         d.addCallback(lambda x: None)
         return d
 

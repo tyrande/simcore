@@ -23,7 +23,7 @@ class Gol(object):
         return cls._instance
 
     def init(self, env):
-        self.env, self.sckPool, self.routePool, self.callTunnels, self.stop = env, {}, {}, [], False
+        self.env, self.sckPool, self.routePool, self.callTunnels, self.callTok, self.stop = env, {}, {}, [], 1, False
 
     # Control Route Pool
     #   @param sckCls:          Socket Class Name
@@ -47,7 +47,8 @@ class Gol(object):
         self.callTunnels.append("%s:%d"%(host, port))
 
     def getCallTunnel(self):
-        return random.sample(self.callTunnels, 1)[0]
+        self.callTok = self.callTok%65000 + 1
+        return (self.callTok, random.sample(self.callTunnels, 1)[0])
 
     # Control Socket Pool
     #   @param sid:         Session id of the Socket
@@ -86,15 +87,15 @@ class Gol(object):
         
         logsrt = "%s %s:%d"%(act, peer.host, peer.port)
         if pack : 
-            logsrt += " %s:%s %s:%s "%(pack.apiRet, pack._flags, pack.id, pack.sid)
-            if socket._mo : logsrt += "%s:%s "%(socket._mo.__class__.__name__, socket._mo.id)
+            logsrt += " %s:%s %s:%s %s"%(pack.apiRet, pack._flags, pack.id, pack.sid, pack.body)
+            if socket._mo : logsrt += " %s:%s "%(socket._mo.__class__.__name__, socket._mo.id)
         logsrt += (' ' + str)
         print logsrt
 
         if self.env == 'test': 
             _fs = self._formatPack_(act, socket, pack, str)
             _fso = msgpack.packb(_fs[:-1])
-            moid = socket._mo.id if act != 'CM' and socket._mo else None
+            moid = socket._mo.id if socket._mo else None
             pid = pack.id if pack else None
             [ m.show(_fso, moid, pid) for m in Gol().monitor.ms.values() ]
         return

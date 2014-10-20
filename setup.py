@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name = "simcore",
-    version = "0.2.1",
+    version = "0.2.2",
     author = "Alan Shi",
     author_email = "alan@sinosims.com",
 
@@ -14,5 +14,5 @@ setup(
     
     package_data = {"twisted" : ["plugins/simcorePlugins.py"]},
 
-    install_requires = ["twisted", "apns", "msgpack-python"],
+    install_requires = ["twisted", "msgpack-python", "python-messaging", "simisp"],
 )

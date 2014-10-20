@@ -117,15 +117,16 @@ class SHProtocol(protocol.Protocol):
     _redis = SrPushdb().redisPool
     _heart = 5*60
 
-    def connectionMade(self):
-        Gol()._log_('CM', self, None, '>> %s'%self.__class__.__name__) # -*- Log -*- #
-
+    def __init__(self):
         self._recvBuf = ''
         self._pckId = 1000 + random.randint(0, 5000)
         self._session = None
         self._mo = None
         self._TPackWaitPeer = {}
         self._lastRecvAt = time.time()
+
+    def connectionMade(self):
+        Gol()._log_('CM', self, None, '>> %s'%self.__class__.__name__) # -*- Log -*- #
         reactor.callLater(self._heart, self.closeConnection)
 
     def connectionLost(self, reason):

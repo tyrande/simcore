@@ -46,12 +46,12 @@ class PhoneMo(SHProtocol):
     @routeCode(3502)
     def doTalkingToChip(self, tpack):
         if not self._mo: raise Exception(401)
-        tok = uuid.uuid1().hex
-        srv = Gol().getCallTunnel()
+        # tok = uuid.uuid1().hex
+        tok, srv = Gol().getCallTunnel()
         host, port = srv.split(':')
         d = self._mo.chip(tpack.body['oth'])
-        d.addCallback(lambda c: self.sendToChip(c, 1003, [ c.id, 1,  host, int(port), '01' + tok ], tpack.id))
-        d.addCallback(lambda x: self.returnDPack(200, { 'srv' : srv, 'tok' : '00' + tok }, tpack.id))
+        d.addCallback(lambda c: self.sendToChip(c, 1003, [ c.id, 1,  host, int(port), tok, 1 ], tpack.id))
+        d.addCallback(lambda x: self.returnDPack(200, { 'srv' : srv, 'tok' : tok, 'rol' : 0 }, tpack.id))
         return d
 
     @routeCode(3503)

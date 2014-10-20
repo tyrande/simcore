@@ -114,6 +114,7 @@ class Session(RedisHash):
     #   Session:<id>:info      hash     @keys
     
     _infoTX = 604800
+    # pass
 
 class User(RedisHash):
     # User Model inherit from RedisHash
@@ -139,6 +140,7 @@ class User(RedisHash):
 
         _script = """
             redis.call('hset', 'Session:'..KEYS[1]..':info', 'chn', KEYS[2])
+            redis.call('expire', 'Session:'..KEYS[4]..':info', KEYS[5])
             redis.call('zadd', 'User:'..KEYS[3]..':news', KEYS[4], KEYS[1])
             local c = {}
             local cs  = {}
@@ -148,15 +150,15 @@ class User(RedisHash):
                 cs = redis.call('zrange', 'Box:'..v..':Chips', 0, -1)
                 for p, q in pairs(cs) do
                     cll = redis.call('hget', 'Chip:'..q..':info', 'cll')
-                    if cll then c[p] = redis.call('hmget', 'Call:'..tostring(cll)..':info', 'uid', 'cpid', 'oth', 'loc', 'id', 'st', 'ed') end
+                    if cll then table.insert(c, redis.call('hmget', 'Call:'..tostring(cll)..':info', 'uid', 'cpid', 'oth', 'loc', 'id', 'st', 'ed')) end
                 end
             end
             return c
         """
-        d = self._redis.eval(_script, [ses.id, chn, self.id, int(time.time())])
+        d = self._redis.eval(_script, [ses.id, chn, self.id, int(time.time()), Session._infoTX])
         d.addCallback(lambda cls: [ {'cid' : c[1], 'oth' : c[2], 'seq' : c[4], 'loc' : c[3], 'tim' : int(c[5])} 
                                     for c in cls 
-                                    if c[0] == '' and (not c[6]) and (time.time() - int(c[5])) < 60 ])
+                                    if c[0] == '' and (not c[6]) and (time.time() - int(c[5])) < 180 ])
         return d
 
     # def addNewsSession(self, sid):
@@ -352,7 +354,7 @@ class Chip(RedisHash):
             return ses
         """
         d = self._redis.eval(_script, [clid, self.get('cdid', ''), self.id, self['bid'], oth, fnum, inum, loc, int(time.time())])
-        d.addCallback(lambda sa: (sa, clid))
+        d.addCallback(lambda sa: (sa, inum, loc))
         return d
 
     def answerCall(self, clid, uid):
@@ -433,9 +435,9 @@ class Chip(RedisHash):
         #   9   Add Calling to Asynchronous System:Smsing smsing  
 
         sms = SmsDeliver(pdu).data
-        tim = int(time.mktime(sms['date'].timetuple()))
+        tim = int(time.mktime(sms['date'].utctimetuple())) + 28800
         now = int(time.time()*1000)
-        (fnum, inum, loc) = phoneNum.loads(sms['csca'])
+        (fnum, inum, loc) = phoneNum.loads(sms['number'])
         smsid = "%s%d%d"%(inum[-20:], now, random.randrange(100, 999))
         now = now/1000
         msg = base64.b64encode(sms['text'].encode('utf8'))
@@ -457,8 +459,8 @@ class Chip(RedisHash):
             if atk ~= '' then redis.call('rpush', 'System:Smsing', atk..KEYS[1]) end
             return ses
         """
-        d = self._redis.eval(_script, [smsid, self.id, self['cdid'], self['bid'], sms['csca'], fnum, inum, loc, msg, tim, now ])
-        d.addCallback(lambda sa: (sa, [sms['csca'], sms['text'], tim]))
+        d = self._redis.eval(_script, [smsid, self.id, self['cdid'], self['bid'], sms['number'], fnum, inum, loc, msg, tim, now ])
+        d.addCallback(lambda sa: (sa, [sms['number'], sms['text'], tim]))
         return d
 
     def users(self):
@@ -496,7 +498,7 @@ class Chip(RedisHash):
     def fineOth(self, oth):
         # Add "#" to the end of Other number through SI3050
 
-        if self['mod'] == 'SI3050': oth = oth.replace('+86', '') + "#"
+        if self['mod'] == 'SI3050': oth = oth.replace('+86', '')# + "#"
         return (self, oth)
 
 class Box(RedisHash):
@@ -505,6 +507,9 @@ class Box(RedisHash):
     #   @key set:       int     The Box is in the setting mode or not, 0 means not in setting mode, 1 means in
     #   @key onl:       int     Box last http connection timestemp
     #   @key name:      str     Box name user for development and test
+    #   @key bv:        str     New version box should update
+    #   @key nv:        str     New version need allow by user to update
+    #   @key typ:       str     typ D : develop, T : test, A : alpha, N : Normal
     #
     # Redis key
     #   Box:<id>:info           hash            @keys
@@ -514,12 +519,12 @@ class Box(RedisHash):
     #   Box:version:<vid>       hash 
     #       id          str         Version id, uuid.uuid4().hex, unique in whole system
     #       ver         str         Version num, 0.1.1
-    #       lvl         int         0 user premission update, 1 force update
-    #       typ         str         Type of the version, hotfix, feature, update
-    #       pha         str         Phase of the version, test, inline, online 
     #       desc        str         Description of the version 
     #       tm          int         Download times
     #       pc          str         Premission Code for update
+    #       pub_<typ>   str         typ D : develop, T : test, A : alpha, N : Normal
+    #   System:Box:<typ>:list   sortset         timestamp : bid
+    #       typ         str         typ D : develop, T : test, A : alpha, N : Normal
 
     def users(self):
         return User.findAllByKey("Box:%s:Users"%self.id)
