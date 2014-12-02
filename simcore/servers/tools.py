@@ -34,18 +34,25 @@ class ToolsProtocol(LineReceiver):
     def connectionMade(self):
         # wel = "Welcome Simcore Tools-%s 1.0.0 (%s)"%(self.factory.channel, time.strftime("%Y-%m-%d %H:%M:%S"))
         # self.sendOut(wel)
-        nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
-        self.sendPlan(self.factory.box.encrypt(self.key, nonce))
+        # nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
+        # self.sendPlan(self.factory.box.encrypt(self.key, nonce))
         # self.sendBack(wel)
+        self.sendText(self.key)
 
     def lineReceived(self, line):
         try:
             # cmdarr = json.loads(base64.b64decode(line))
-            cmdarr = msgpack.unpackb(self.box.decrypt(line), encoding = 'utf-8')
+            plant = self.box.decrypt(line)
+            if plant == 'test':
+                return self.echook()
+            cmdarr = msgpack.unpackb(plant, encoding = 'utf-8')
             m = self.cmd.get(cmdarr[0], None)
             if m: m[0](cmdarr[1])
         except Exception, e:
             print repr(e)
+
+    def echook(self):
+        self.sendText('ok')
 
     def wel(self, args):
         w = "Welcome Simcore Tools-%s 1.0.0 (%s)"%(self.factory.channel, time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -129,12 +136,13 @@ class ToolsProtocol(LineReceiver):
     def sendOut(self, cnt, packed=False):
         nonce = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
         if packed:
-            self.sendLine(self.box.encrypt(cnt, nonce)+'\r\n')
+            self.sendLine(self.box.encrypt(cnt, nonce))
         else:
-            self.sendLine(self.box.encrypt(msgpack.packb(cnt), nonce)+'\r\n')
-                
-    def sendPlan(self, cnt):
-        self.sendLine(msgpack.packb(cnt)+'\r\n')
+            self.sendLine(self.box.encrypt(msgpack.packb(cnt), nonce))
+
+    def sendText(self, cnt):
+        nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
+        self.sendLine(self.factory.box.encrypt(cnt, nonce))
 
     # def sendBack(self, str):
         # self.sendLine(base64.b64encode(str.encode('utf8'))+'\r\n')

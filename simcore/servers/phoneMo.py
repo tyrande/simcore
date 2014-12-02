@@ -30,7 +30,7 @@ class PhoneMo(SHProtocol):
     @routeCode(3401)
     def doSendSMS(self, tpack):
         if not self._mo: raise Exception(401)
-        d = self._mo.sendSMS(tpack.body['cid'], tpack.body['oth'], tpack.body['msg'])
+        d = self._mo.sendSMS(tpack.body['cid'], tpack.body['oth'], tpack.body['msg'], tpack.body['mid'])
         d.addCallback(lambda cs: self.sendToChip(cs[0], 1001, [cs[0].id, 4, cs[1][0], 0x00, 5, '', 'AT+CMGS=%d\r'%cs[1][1], '%s\x1a'%cs[1][2]], tpack.id))
 
     @routeCode(3501)
@@ -51,7 +51,7 @@ class PhoneMo(SHProtocol):
         host, port = srv.split(':')
         d = self._mo.chip(tpack.body['oth'])
         d.addCallback(lambda c: self.sendToChip(c, 1003, [ c.id, 1,  host, int(port), tok, 1 ], tpack.id))
-        d.addCallback(lambda x: self.returnDPack(200, { 'srv' : srv, 'tok' : tok, 'rol' : 0 }, tpack.id))
+        # d.addCallback(lambda x: self.returnDPack(200, { 'srv' : srv, 'tok' : tok, 'rol' : 0 }, tpack.id))
         return d
 
     @routeCode(3503)

@@ -5,7 +5,7 @@
 
 from simcore.core.database import Srdb
 from simcore.core.gol import raiseCode
-from messaging.sms import SmsDeliver, SmsSubmit
+from messaging.sms import SmsDeliver, SmsSubmit, CdmaSmsSubmit
 from simisp import phoneNum
 import uuid, time, random, base64
 
@@ -229,7 +229,7 @@ class User(RedisHash):
         d.addCallback(lambda hs: Chip(cpid, dict(zip(hs[::2], hs[1::2]))) if len(hs) > 0 else raiseCode(603))
         return d
 
-    def sendSMS(self, cpid, oth, msg):
+    def sendSMS(self, cpid, oth, msg, smsid):
         # Called by PhoneMo 3401
         #   1   Pack SMS to pdu string
         #   2   Format other number
@@ -237,11 +237,11 @@ class User(RedisHash):
         #   4   raise 603 if user don't have this chip
         #   5   Set Sms info
 
-        sms = SmsSubmit(oth, msg)
-        pdu = sms.to_pdu()[0]
+        # sms = SmsSubmit(oth, msg)
+        # pdu = sms.to_pdu()[0]
         now = int(time.time()*1000)
         (fnum, inum, loc) = phoneNum.loads(oth)
-        smsid = "%s%d%d"%(inum, now, random.randrange(100, 999))
+        # smsid = "%s%d%d"%(inum, now, random.randrange(100, 999))
         now = now/1000
         _script = """
             local bid = redis.call('hget', 'Chip:'..KEYS[1]..':info', 'bid')
@@ -254,7 +254,8 @@ class User(RedisHash):
             return cp
         """
         d = self._redis.eval(_script, [cpid, self.id, smsid, oth, fnum, inum, loc, base64.b64encode(msg.encode('utf8')), now])
-        d.addCallback(lambda hs: [Chip(cpid, dict(zip(['id', 'mod', 'cdid', 'bid', 'sid', 'chn'], hs))), [smsid, pdu.length, pdu.pdu]] if len(hs) > 0 else raiseCode(603))
+        d.addCallback(lambda hs: [Chip(cpid, dict(zip(['id', 'mod', 'cdid', 'bid', 'sid', 'chn'], hs))), smsid] if len(hs) > 0 else raiseCode(603))
+        d.addCallback(lambda cs: [cs[0], [cs[1], SmsSubmit(oth, msg).to_pdu()[0]] if cs[0]['mod'] != 'MG2639' else [cs[1], CdmaSmsSubmit(oth, msg).to_pdu()[0]]])
         return d
 
 class Chip(RedisHash):
@@ -272,6 +273,7 @@ class Chip(RedisHash):
     #   @key chn:       str     Current connected Server channel
     #   @key lvl:       int     Chip's level on the top of the Box
     #   @key sig:       int     Sthength of the Signal, 0 ~ 9, 0 means no signal
+    #   @key stt:       int     Chip status
     #
     #   @key cll:       str     Current Call id, Key don't exist or Value is '' if no current call
     #
@@ -297,13 +299,18 @@ class Chip(RedisHash):
             redis.call('zadd', 'Box:'..KEYS[3]..':Chips', tonumber(KEYS[10]), KEYS[1])
             redis.call('hset', 'Session:'..KEYS[4]..':info', 'Chip', KEYS[1])
             local us = redis.call('zrange', 'Box:'..KEYS[3]..':Users', 0, -1)
+            local ses = {}
             for k, v in pairs(us) do
                 redis.call('hset', 'User:'..v..':info', 'bv', KEYS[10])
                 redis.call('hsetnx', 'User:'..v..':Cards', KEYS[2], '')
+                redis.call('zremrangebyscore', 'User:'..v..':news', 0, tonumber(KEYS[10]) - 5*60)
+                for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
+                    table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
+                end
             end
             local ni = redis.call('hexists', 'Card:'..KEYS[2]..':info', 'num')
             if ni == 0 then redis.call('hmset', 'Card:'..KEYS[2]..':info', 'imsi', KEYS[2], 'mod', KEYS[6], 'icc', KEYS[7], 'isp', KEYS[8]) end
-            return ni
+            return ses
         """
         return self._redis.eval(_script, [self.id, imsi, bid, ses.id, chn, mod, icc, isp, lvl, int(time.time())])
 
@@ -392,6 +399,7 @@ class Chip(RedisHash):
 
         clid = self.get('cll', None)
         if not clid: return None
+        del self['cll']
         _script = """
             redis.call('hmset', 'Call:'..KEYS[1]..':info', 'stt', KEYS[2], 'ed', KEYS[3])
             redis.call('hdel', 'Chip:'..KEYS[4]..':info', 'cll')
@@ -466,16 +474,17 @@ class Chip(RedisHash):
     def users(self):
         return Box(self['bid']).users()
 
-    def onl(self):
+    def onl(self, info):
         # Called by ChipMo 2002
         #   1   Change Box Chips Timestamp
         #   2   Delay Session Redis expire time
 
         _script = """
             redis.call('zadd', 'Box:'..KEYS[1]..':Chips', KEYS[2], KEYS[3])
+            redis.call('hmset', 'Chip:'..KEYS[3]..':info', 'sig', KEYS[6], 'stt', KEYS[7])
             redis.call('expire', 'Session:'..KEYS[4]..':info', KEYS[5])
         """
-        return self._redis.eval(_script, [self['bid'], int(time.time()), self.id, self['sid'], Session._infoTX])
+        return self._redis.eval(_script, [self['bid'], int(time.time()), self.id, self['sid'], Session._infoTX, info[1], info[2]])
 
     def call(self):
         pass

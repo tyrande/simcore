@@ -35,6 +35,7 @@ class ChipMo(SHProtocol):
         lvl = lvl.replace('/dev/', '').replace('/', '_')
         c = self.setMo(Chip(imei))
         d = c.login(imsi, bid, self._session, self.factory.channel, mod, iccid, lvl)
+        d.addCallback(lambda ses: self.sendNews(ses, 4003, { 'cpid' : self._mo.id } ))
         # d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
         d.addCallback(lambda at: self.cnum(tpack, at))
         return d
@@ -68,7 +69,8 @@ class ChipMo(SHProtocol):
             else:
                 self.returnToUser(dpack, dpack.apiRet, { 'stt' : -1 })
         elif dpack._TPack.body[1] == 2:
-            d = self.returnToUser(dpack, dpack.apiRet, { 'stt' : 0 })
+            d = self._mo.endCall()
+            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 0 }))
         elif dpack._TPack.body[1] == 3:
             d = self._mo.answerCall(dpack._TPack.body[2], dpack._PPack.senderId)
             d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
@@ -86,7 +88,9 @@ class ChipMo(SHProtocol):
         return d
 
     @routeCode(1003)
-    def recvOpenAudio(self, dpack): return None
+    def recvOpenAudio(self, dpack): 
+        return self.returnToUser(dpack, dpack.apiRet, { 'srv' : "%s:%d"%(dpack._TPack.body[2], dpack._TPack.body[3]), 'tok' : dpack._TPack.body[4], 'rol' : 0 })
+        # return None
 
     @routeCode(2001)
     def recvATresult(self, tpack):
@@ -124,7 +128,7 @@ class ChipMo(SHProtocol):
     @routeCode(2002)
     def recvCardInfo(self, tpack):
         if not self._mo: raise Exception(401)
-        d = self._mo.onl()
+        d = self._mo.onl(tpack.body)
         d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
         return d
 
