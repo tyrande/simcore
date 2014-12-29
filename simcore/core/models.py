@@ -5,7 +5,7 @@
 
 from simcore.core.database import Srdb
 from simcore.core.gol import raiseCode
-from messaging.sms import SmsDeliver, SmsSubmit, CdmaSmsSubmit
+from messaging.sms import SmsDeliver, SmsSubmit, CdmaSmsSubmit, CdmaSmsDeliver
 from simisp import phoneNum
 import uuid, time, random, base64
 
@@ -132,7 +132,7 @@ class User(RedisHash):
     #   User:<id>:othsms:<oth>:sms      sortset
     #   User:<id>:atk                   hash        phoneIMEI : phoneATK
 
-    def newsHeart(self, ses, chn):
+    def newsHeart(self, ses, chn, body):
         # Called by PhoneNoti 401
         #   1   Set news Session info
         #   2   Add news Session to User
@@ -218,14 +218,19 @@ class User(RedisHash):
 
         _script = """
             local bid = redis.call('hget', 'Chip:'..KEYS[1]..':info', 'bid')
+            local csc = redis.call('zscore', 'Box:'..bid..':Chips', KEYS[1])
             local sc = redis.call('zscore', 'User:'..KEYS[2]..':Boxes', bid)
             local cp = {}
+            if csc == nil then
+                return {'0'}
+            end
             if sc ~= nil then
                 cp = redis.call('hgetall', 'Chip:'..KEYS[1]..':info')
             end
             return cp
         """
         d = self._redis.eval(_script, [cpid, self.id])
+        d.addCallback(lambda hs: raiseCode(701) if len(hs) == 1 else hs)
         d.addCallback(lambda hs: Chip(cpid, dict(zip(hs[::2], hs[1::2]))) if len(hs) > 0 else raiseCode(603))
         return d
 
@@ -245,8 +250,12 @@ class User(RedisHash):
         now = now/1000
         _script = """
             local bid = redis.call('hget', 'Chip:'..KEYS[1]..':info', 'bid')
+            local csc = redis.call('zscore', 'Box:'..bid..':Chips', KEYS[1])
             local sc = redis.call('zscore', 'User:'..KEYS[2]..':Boxes', bid)
             local cp = {}
+            if csc == nil then
+                return {'0'}
+            end
             if sc ~= nil then
                 cp = redis.call('hmget', 'Chip:'..KEYS[1]..':info', 'id', 'mod', 'cdid', 'bid', 'sid', 'chn')
                 redis.call('hmset', 'Sms:'..KEYS[3]..':info', 'id', KEYS[3], 'cpid', cp[1], 'cdid', cp[3], 'bid', cp[4], 'uid', KEYS[2], 'oth', KEYS[4], 'fnum', KEYS[5], 'inum', KEYS[6], 'loc', KEYS[7], 'msg', KEYS[8], 'st', KEYS[9])
@@ -254,8 +263,11 @@ class User(RedisHash):
             return cp
         """
         d = self._redis.eval(_script, [cpid, self.id, smsid, oth, fnum, inum, loc, base64.b64encode(msg.encode('utf8')), now])
-        d.addCallback(lambda hs: [Chip(cpid, dict(zip(['id', 'mod', 'cdid', 'bid', 'sid', 'chn'], hs))), smsid] if len(hs) > 0 else raiseCode(603))
-        d.addCallback(lambda cs: [cs[0], [cs[1], SmsSubmit(oth, msg).to_pdu()[0]] if cs[0]['mod'] != 'MG2639' else [cs[1], CdmaSmsSubmit(oth, msg).to_pdu()[0]]])
+        d.addCallback(lambda hs: raiseCode(701) if len(hs) == 1 else hs)
+        d.addCallback(lambda hs: Chip(cpid, dict(zip(['id', 'mod', 'cdid', 'bid', 'sid', 'chn'], hs))) if len(hs) > 0 else raiseCode(603))
+        d.addCallback(lambda cp: [cp, SmsSubmit(oth, msg).to_pdu()[0] if cp['mod'] == 'MG2639' else CdmaSmsSubmit(oth, msg).to_pdu()[0]])
+        d.addCallback(lambda cs: [cs[0], [cs[0].id, 4, smsid, 0x00, 5, '', 'AT+CMGS=%d\r'%cs[1].length, '%s\x1a'%cs[1].pdu] if cs[0]['mod'] == 'MG2639' else [cs[0].id, 4, smsid, 0x00, 5, 'AT+CMGS=%d\r%s\x1a'%(cs[1].length, cs[1].pdu)]])
+        # d.addCallback(lambda cs: [cs[0], [cs[1][0], cs[1][1].length, cs[1][1].pdu]])
         return d
 
 class Chip(RedisHash):
@@ -295,7 +307,7 @@ class Chip(RedisHash):
         isph = {'00' : 11, '02' : 11, '07' : 11, '01' : 12, '06' : 12, '20' : 12, '03' : 13, '05' : 13}
         isp = 1 if mod == 'SI3050' else isph.get(imsi[3:5], 0)
         _script = """
-            redis.call('hmset', 'Chip:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'bid', KEYS[3], 'sid', KEYS[4], 'chn', KEYS[5], 'mod', KEYS[6], 'lvl', KEYS[9])
+            redis.call('hmset', 'Chip:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'bid', KEYS[3], 'sid', KEYS[4], 'chn', KEYS[5], 'mod', KEYS[6], 'lvl', KEYS[9], 'lcon', KEYS[10])
             redis.call('zadd', 'Box:'..KEYS[3]..':Chips', tonumber(KEYS[10]), KEYS[1])
             redis.call('hset', 'Session:'..KEYS[4]..':info', 'Chip', KEYS[1])
             local us = redis.call('zrange', 'Box:'..KEYS[3]..':Users', 0, -1)
@@ -342,22 +354,40 @@ class Chip(RedisHash):
         self['cll'] = clid
         oth = clid[0:-16]
         (fnum, inum, loc) = phoneNum.loads(oth)
+        # _script = """
+        #     redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', '', 'oth', KEYS[5], 'fnum', KEYS[6], 'inum', KEYS[7], 'loc', KEYS[8], 'typ', '1', 'stt', '1', 'st', KEYS[9])
+        #     redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
+        #     local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
+        #     local ses = {}
+        #     local atk = ''
+        #     for k, v in pairs(ids) do
+        #         for m,n in pairs(redis.call('hvals', 'User:'..v..':atk')) do
+        #             atk = atk..n..','
+        #         end
+        #         redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[9] - 5*60)
+        #         for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
+        #             table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
+        #         end
+        #     end
+        #     if atk ~= '' then redis.call('rpush', 'System:Ring', atk..KEYS[5]..','..KEYS[9]) end
+        #     return ses
+        # """
         _script = """
             redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', '', 'oth', KEYS[5], 'fnum', KEYS[6], 'inum', KEYS[7], 'loc', KEYS[8], 'typ', '1', 'stt', '1', 'st', KEYS[9])
             redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
             local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
             local ses = {}
-            local atk = ''
+            local an = ''
+            local n = ''
             for k, v in pairs(ids) do
-                for m,n in pairs(redis.call('hvals', 'User:'..v..':atk')) do
-                    atk = atk..n..','
-                end
+                n = redis.call('hget', 'User:'..v..':info', 'atkname')
+                if n then an = an..n..',' end
                 redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[9] - 5*60)
                 for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
                     table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
                 end
             end
-            if atk ~= '' then redis.call('rpush', 'System:Ring', atk..KEYS[5]..','..KEYS[9]) end
+            if an ~= '' then redis.call('rpush', 'System:Ring', an..KEYS[5]..','..KEYS[9]) end
             return ses
         """
         d = self._redis.eval(_script, [clid, self.get('cdid', ''), self.id, self['bid'], oth, fnum, inum, loc, int(time.time())])
@@ -442,33 +472,51 @@ class Chip(RedisHash):
         #   8   Find News Session which should push smsing
         #   9   Add Calling to Asynchronous System:Smsing smsing  
 
-        sms = SmsDeliver(pdu).data
+        sms = SmsDeliver(pdu).data if self['mod'] == 'MG2639' else CdmaSmsDeliver(pdu).data
         tim = int(time.mktime(sms['date'].utctimetuple())) + 28800
         now = int(time.time()*1000)
         (fnum, inum, loc) = phoneNum.loads(sms['number'])
         smsid = "%s%d%d"%(inum[-20:], now, random.randrange(100, 999))
         now = now/1000
         msg = base64.b64encode(sms['text'].encode('utf8'))
+        # _script = """
+        #     redis.call('hmset', 'Sms:'..KEYS[1]..':info', 'id', KEYS[1], 'cpid', KEYS[2], 'cdid', KEYS[3], 'bid', KEYS[4], 'oth', KEYS[5], 'fnum', KEYS[6], 'inum', KEYS[7], 'loc', KEYS[8], 'msg', KEYS[9], 'st', KEYS[10], 'ed', KEYS[11])
+        #     redis.call('rpush', 'System:Sms', KEYS[1])
+        #     local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
+        #     local ses = {}
+        #     local atk = ''
+        #     for k, v in pairs(ids) do
+        #         for m,n in pairs(redis.call('hvals', 'User:'..v..':atk')) do
+        #             atk = atk..n..','
+        #         end
+        #         redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[10] - 5*60)
+        #         for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
+        #             table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
+        #         end
+        #     end
+        #     if atk ~= '' then redis.call('rpush', 'System:Smsing', atk..KEYS[1]) end
+        #     return ses
+        # """
         _script = """
             redis.call('hmset', 'Sms:'..KEYS[1]..':info', 'id', KEYS[1], 'cpid', KEYS[2], 'cdid', KEYS[3], 'bid', KEYS[4], 'oth', KEYS[5], 'fnum', KEYS[6], 'inum', KEYS[7], 'loc', KEYS[8], 'msg', KEYS[9], 'st', KEYS[10], 'ed', KEYS[11])
             redis.call('rpush', 'System:Sms', KEYS[1])
             local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
             local ses = {}
-            local atk = ''
+            local an = ''
+            local n = ''
             for k, v in pairs(ids) do
-                for m,n in pairs(redis.call('hvals', 'User:'..v..':atk')) do
-                    atk = atk..n..','
-                end
+                n = redis.call('hget', 'User:'..v..':info', 'atkname')
+                if n then an = an..n..',' end
                 redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[10] - 5*60)
                 for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
                     table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
                 end
             end
-            if atk ~= '' then redis.call('rpush', 'System:Smsing', atk..KEYS[1]) end
+            if an ~= '' then redis.call('rpush', 'System:Smsing', an..KEYS[1]) end
             return ses
         """
         d = self._redis.eval(_script, [smsid, self.id, self['cdid'], self['bid'], sms['number'], fnum, inum, loc, msg, tim, now ])
-        d.addCallback(lambda sa: (sa, [sms['number'], sms['text'], tim]))
+        d.addCallback(lambda sa: (sa, [sms['number'], sms['text'], tim, inum, smsid]))
         return d
 
     def users(self):
@@ -479,10 +527,19 @@ class Chip(RedisHash):
         #   1   Change Box Chips Timestamp
         #   2   Delay Session Redis expire time
 
+        self['sig'] = info[1]
+        self['stt'] = info[2]
         _script = """
             redis.call('zadd', 'Box:'..KEYS[1]..':Chips', KEYS[2], KEYS[3])
             redis.call('hmset', 'Chip:'..KEYS[3]..':info', 'sig', KEYS[6], 'stt', KEYS[7])
             redis.call('expire', 'Session:'..KEYS[4]..':info', KEYS[5])
+            local ses = {}
+            for k, v in pairs(redis.call('zrange', 'Box:'..KEYS[1]..':Users', 0, -1)) do
+                for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
+                    table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
+                end
+            end
+            return ses
         """
         return self._redis.eval(_script, [self['bid'], int(time.time()), self.id, self['sid'], Session._infoTX, info[1], info[2]])
 
@@ -548,9 +605,14 @@ class Box(RedisHash):
         _script = """
             redis.call('zrem', 'Box:'..KEYS[1]..':Chips', KEYS[2])
             local us = redis.call('zrange', 'Box:'..KEYS[1]..':Users', 0, -1)
+            local ses = {}
             for k, v in pairs(us) do
                 redis.call('hset', 'User:'..v..':info', 'bv', KEYS[3])
+                for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
+                    table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
+                end
             end
+            return ses
         """
         return self._redis.eval(_script, [self.id, cpid, int(time.time())])
 

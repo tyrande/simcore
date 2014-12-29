@@ -252,12 +252,12 @@ class SHProtocol(protocol.Protocol):
         pass
 
     def errorRoutePack(self, failure, tpack):
-        if Gol().env == 'test':
-            raise failure
+        # if Gol().env == 'test':
+            # raise failure
         try:
             self.returnDPack(int(failure.getErrorMessage()), None, tpack.id)
         except Exception, e:
-            Gol()._log_('ER', self, None, repr(failure.getBriefTraceback().replace('\n', ' ')))
+            Gol()._log_('MS', self, None, repr(failure.getBriefTraceback().replace('\n', ' ')))
 
     def addTPackWaiting(self, pack):
         # Waiting DPack Timeout 30 seconds

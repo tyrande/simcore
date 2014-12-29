@@ -40,14 +40,16 @@ class Options(usage.Options):
 
 def wrap_setServiceParent(func, options):
     def decorator(app):
-        if options["env"] == 'production':
-            logfile = DailyLogFile(options["logfile"], "")
-            flo = SimLogObserver(logfile)
-            flo.timeFormat = "%Y-%m-%d %H:%M:%S"
-            app.setComponent(ILogObserver, flo.emit)
-        else:
-            log.FileLogObserver.timeFormat = "%Y-%m-%d %H:%M:%S"
-            log.FileLogObserver.emit = _emit
+        # if options["env"] == 'production':
+        #     logfile = DailyLogFile(options["logfile"], "")
+        #     flo = SimLogObserver(logfile)
+        #     flo.timeFormat = "%Y-%m-%d %H:%M:%S"
+        #     app.setComponent(ILogObserver, flo.emit)
+        # else:
+        #     log.FileLogObserver.timeFormat = "%Y-%m-%d %H:%M:%S"
+        #     log.FileLogObserver.emit = _emit
+        log.FileLogObserver.timeFormat = "%Y-%m-%d %H:%M:%S"
+        log.FileLogObserver.emit = _emit
         func(app)
     return decorator
 

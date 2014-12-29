@@ -70,7 +70,7 @@ class ChipMo(SHProtocol):
                 self.returnToUser(dpack, dpack.apiRet, { 'stt' : -1 })
         elif dpack._TPack.body[1] == 2:
             d = self._mo.endCall()
-            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 0 }))
+            if d: d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 0 }))
         elif dpack._TPack.body[1] == 3:
             d = self._mo.answerCall(dpack._TPack.body[2], dpack._PPack.senderId)
             d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
@@ -117,10 +117,10 @@ class ChipMo(SHProtocol):
             cb = self.parseCLCC(tpack.body[6])
             d = cb(tpack.body[2]) if cb else None
         elif tpack.body[1] == 201:
-            match = re.match('\+CMGL:.*\s+([0-9A-F]*)\s+', tpack.body[6])
+            match = re.match('\+CMGL:.*\s+([0-9A-F]*)[\x1a]*\s+', tpack.body[6])
             if not match: return None
             d = self._mo.smsing(match.group(1))
-            d.addCallback(lambda sa: self.sendNews(sa[0], 4002, { 'cid' : self._mo.id, 'oth' : sa[1][0], 'msg' : sa[1][1], 'tim' : sa[1][2] }))
+            d.addCallback(lambda sa: self.sendNews(sa[0], 4002, { 'cid' : self._mo.id, 'oth' : sa[1][0], 'msg' : sa[1][1], 'tim' : sa[1][2], 'inum' : sa[1][3], 'smsid' : sa[1][4] }))
         else:
             d = None
         return d
@@ -128,7 +128,9 @@ class ChipMo(SHProtocol):
     @routeCode(2002)
     def recvCardInfo(self, tpack):
         if not self._mo: raise Exception(401)
+        cstt = self._mo.get('stt', 0)
         d = self._mo.onl(tpack.body)
+        if cstt != tpack.body[2]: d.addCallback(lambda ses: self.sendNews(ses, 4003, { 'cpid' : self._mo.id }))
         d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
         return d
 
@@ -169,6 +171,7 @@ class ChipMo(SHProtocol):
     def connectionLost(self, reason):
         if self._mo:
             d = Box(self._mo['bid']).delChip(self._mo.id)
+            d.addCallback(lambda ses: self.sendNews(ses, 4003, { 'cpid' : self._mo.id }))
             d.addCallback(lambda x: SHProtocol.connectionLost(self, reason))
         else:
             d = SHProtocol.connectionLost(self, reason)

@@ -9,7 +9,7 @@ from twisted.protocols.basic import LineReceiver
 from simcore.core.models import User, Chip, Box, Card, Session, Call, Sms
 from simcore.core.gol import Gol
 import re, time, json, base64, uuid, msgpack
-import nacl.utils, nacl.secret, nacl.public
+# import nacl.utils, nacl.secret, nacl.public
 
 class ToolsProtocol(LineReceiver):
     def __init__(self):
@@ -28,8 +28,8 @@ class ToolsProtocol(LineReceiver):
                     'mon' : [self.monitor, '["mon", [moid, moid, ..., moid]]      monitor chips or users or both'],
                     'monall' : [self.monitorAll, '["monall"]      monitor socket'],
                     'monstop' : [self.monitorStop, '["monstop"]     stop monitor']}
-        self.key = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
-        self.box = nacl.secret.SecretBox(self.key)
+ #       self.key = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
+ #       self.box = nacl.secret.SecretBox(self.key)
 
     def connectionMade(self):
         # wel = "Welcome Simcore Tools-%s 1.0.0 (%s)"%(self.factory.channel, time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -165,7 +165,7 @@ class ToolsFactory(Factory):
     def __init__(self, channel):
         self.channel = channel
         self.ms = {}
-        self.box = nacl.public.Box(nacl.public.PrivateKey('\xd5J\xde\xc9\xd1\x13\x8c`B\xa4\xe7N\x9b]\xdd\x135=S*.\xf3)>\x19:[7)\xa8\xd6{'), nacl.public.PublicKey('\xb9q\xd3w\xb9\xfb@\x1d\xc6N\x84\x8f6bU2\xfa\xc4\x01Z]4g2\x07\xedx\x84\xfe\x82Zk'))
+        # self.box = nacl.public.Box(nacl.public.PrivateKey('\xd5J\xde\xc9\xd1\x13\x8c`B\xa4\xe7N\x9b]\xdd\x135=S*.\xf3)>\x19:[7)\xa8\xd6{'), nacl.public.PublicKey('\xb9q\xd3w\xb9\xfb@\x1d\xc6N\x84\x8f6bU2\xfa\xc4\x01Z]4g2\x07\xedx\x84\xfe\x82Zk'))
 
     def addMonitor(self, sck):
         self.ms[sck.id] = sck
