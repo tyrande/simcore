@@ -19,13 +19,17 @@ def deploy():
     
     run('rm -rf /home/sim/tmp/%s /home/sim/tmp/simcore.tar.gz'%dist)
 
-def remote_start():
-    with cd('/home/sim/opt/simcore'):
-        run('/home/sim/opt/simenv/bin/twistd simcore --pools=/home/sim/opt/pools/ --env=production --logfile=/home/sim/opt/simcore/logs/simcore.log')
+# def remote_start():
+#     with cd('/home/sim/opt/simcore'):
+#         run('/home/sim/opt/simenv/bin/twistd simcore --pools=/home/sim/opt/pools/ --env=production --logfile=/home/sim/opt/simcore/logs/simcore.log')
 
-def remote_stop():
-    run('kill `cat /home/sim/opt/simcore/twistd.pid`')
+# def remote_stop():
+#     run('kill `cat /home/sim/opt/simcore/twistd.pid`')
+
+# def remote_restart():
+#     remote_stop()
+#     remote_start()
 
 def remote_restart():
-    remote_stop()
-    remote_start()
+    with cd('/home/sim/opt/simcore'):
+        run('./restart')

@@ -139,6 +139,14 @@ class User(RedisHash):
         #   3   Get current Calling
 
         _script = """
+            local rc = '0_0_0'
+            if KEYS[6] == '21' then
+                local av = redis.call('hget', 'User:'..KEYS[3]..':info', 'av')
+                if av then rc = av end
+            elseif KEYS[6] == '20' then
+                local ov = redis.call('hget', 'User:'..KEYS[3]..':info', 'ov')
+                if ov then rc = ov end
+            end
             redis.call('hset', 'Session:'..KEYS[1]..':info', 'chn', KEYS[2])
             redis.call('expire', 'Session:'..KEYS[4]..':info', KEYS[5])
             redis.call('zadd', 'User:'..KEYS[3]..':news', KEYS[4], KEYS[1])
@@ -153,12 +161,12 @@ class User(RedisHash):
                     if cll then table.insert(c, redis.call('hmget', 'Call:'..tostring(cll)..':info', 'uid', 'cpid', 'oth', 'loc', 'id', 'st', 'ed')) end
                 end
             end
-            return c
+            return {rc, c}
         """
-        d = self._redis.eval(_script, [ses.id, chn, self.id, int(time.time()), Session._infoTX])
-        d.addCallback(lambda cls: [ {'cid' : c[1], 'oth' : c[2], 'seq' : c[4], 'loc' : c[3], 'tim' : int(c[5])} 
-                                    for c in cls 
-                                    if c[0] == '' and (not c[6]) and (time.time() - int(c[5])) < 180 ])
+        d = self._redis.eval(_script, [ses.id, chn, self.id, int(time.time()), Session._infoTX, ses.get('rol', '0')])
+        d.addCallback(lambda cls: [cls[0].split('_'), [ {'cid' : c[1], 'oth' : c[2], 'seq' : c[4], 'loc' : c[3], 'tim' : int(c[5])} 
+                                    for c in cls[1] 
+                                    if c[0] == '' and (not c[6]) and (time.time() - int(c[5])) < 180 ]])
         return d
 
     # def addNewsSession(self, sid):

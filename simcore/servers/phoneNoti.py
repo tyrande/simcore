@@ -15,8 +15,13 @@ class PhoneNoti(SHProtocol):
         if not self._mo: raise Exception(401)
         # if tpack.body and tpack.body[0][0] == '1': raise Exception(407)
         d = self._mo.newsHeart(self._session, self.factory.channel, tpack.body)
-        d.addCallback(lambda cs: self.returnDPack(200, cs, tpack.id))
+        d.addCallback(lambda cs: self.returnDPack(200 if self.isNewVersion(cs[0], tpack.body[0].split('.')) else 201, cs[1], tpack.id))
         return d
+
+    def isNewVersion(self, needv, curv):
+        for i in [0, 1, 2]:
+            if curv[i] < needv[i]: return False
+        return True
 
     @routeCode(4001)
     def recvRing(self, dpack): return None
