@@ -20,7 +20,8 @@ class PhoneNoti(SHProtocol):
 
     def isNewVersion(self, needv, curv):
         for i in [0, 1, 2]:
-            if curv[i] < needv[i]: return False
+            if curv[i] == needv[i]: continue
+            return  False if int(curv[i]) < int(needv[i]) else True
         return True
 
     @routeCode(4001)

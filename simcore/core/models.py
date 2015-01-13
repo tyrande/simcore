@@ -274,7 +274,7 @@ class User(RedisHash):
         d.addCallback(lambda hs: raiseCode(701) if len(hs) == 1 else hs)
         d.addCallback(lambda hs: Chip(cpid, dict(zip(['id', 'mod', 'cdid', 'bid', 'sid', 'chn'], hs))) if len(hs) > 0 else raiseCode(603))
         d.addCallback(lambda cp: [cp, SmsSubmit(oth, msg).to_pdu()[0] if cp['mod'] == 'MG2639' else CdmaSmsSubmit(oth, msg).to_pdu()[0]])
-        d.addCallback(lambda cs: [cs[0], [cs[0].id, 4, smsid, 0x00, 5, '', 'AT+CMGS=%d\r'%cs[1].length, '%s\x1a'%cs[1].pdu] if cs[0]['mod'] == 'MG2639' else [cs[0].id, 4, smsid, 0x00, 5, 'AT+CMGS=%d\r%s\x1a'%(cs[1].length, cs[1].pdu)]])
+        d.addCallback(lambda cs: [cs[0], [cs[0].id, 4, smsid, 0x00, 10, '', 'AT+CMGS=%d\r'%cs[1].length, '%s\x1a'%cs[1].pdu] if cs[0]['mod'] == 'MG2639' else [cs[0].id, 4, smsid, 0x00, 10, '', 'AT+CMGS=%d\r%s\x1a'%(cs[1].length, cs[1].pdu)]])
         # d.addCallback(lambda cs: [cs[0], [cs[1][0], cs[1][1].length, cs[1][1].pdu]])
         return d
 
@@ -345,6 +345,7 @@ class Chip(RedisHash):
         _script = """
             redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', KEYS[5], 'oth', KEYS[6], 'fnum', KEYS[7], 'inum', KEYS[8], 'loc', KEYS[9], 'typ', '0', 'stt', '1', 'st', KEYS[10])
             redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
+            redis.call('zadd', 'Box:'..KEYS[4]..':Chips', tonumber(KEYS[10]), KEYS[3])
         """
         d = self._redis.eval(_script, [clid, self.get('cdid', ''), self.id, self['bid'], uid, oth, fnum, inum, loc, int(time.time())]) 
         d.addCallback(lambda x: Call(clid))
@@ -383,6 +384,7 @@ class Chip(RedisHash):
         _script = """
             redis.call('hmset', 'Call:'..KEYS[1]..':info', 'id', KEYS[1], 'cdid', KEYS[2], 'cpid', KEYS[3], 'bid', KEYS[4], 'uid', '', 'oth', KEYS[5], 'fnum', KEYS[6], 'inum', KEYS[7], 'loc', KEYS[8], 'typ', '1', 'stt', '1', 'st', KEYS[9])
             redis.call('hset', 'Chip:'..KEYS[3]..':info', 'cll', KEYS[1])
+            redis.call('zadd', 'Box:'..KEYS[4]..':Chips', tonumber(KEYS[9]), KEYS[3])
             local ids = redis.call('zrange', 'Box:'..KEYS[4]..':Users', 0, -1)
             local ses = {}
             local an = ''
@@ -416,7 +418,7 @@ class Chip(RedisHash):
         _script = """
             local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
             local ses = {}
-            redis.call('zremrangebyscore', 'User:'..uid..':news', 0, KEYS[2] - 5*60)
+            redis.call('zremrangebyscore', 'User:'..uid..':news', 0, tonumber(KEYS[2]) - 5*60)
             for k,v in pairs(redis.call('zrange', 'User:'..uid..':news', 0, -1)) do
                 table.insert(ses, {v,redis.call('hget', 'Session:'..v..':info', 'chn')})
             end
@@ -441,6 +443,7 @@ class Chip(RedisHash):
         _script = """
             redis.call('hmset', 'Call:'..KEYS[1]..':info', 'stt', KEYS[2], 'ed', KEYS[3])
             redis.call('hdel', 'Chip:'..KEYS[4]..':info', 'cll')
+            redis.call('zadd', 'Box:'..KEYS[5]..':Chips', tonumber(KEYS[3]), KEYS[4])
             redis.call('rpush', 'System:Calls', KEYS[1])
             local uid = redis.call('hget', 'Call:'..KEYS[1]..':info', 'uid')
             local ids = {uid}
@@ -465,8 +468,9 @@ class Chip(RedisHash):
         _script = """
             redis.call('hmset', 'Sms:'..KEYS[1]..':info', 'ed', KEYS[2])
             redis.call('rpush', 'System:Sms', KEYS[1])
+            redis.call('zadd', 'Box:'..KEYS[4]..':Chips', tonumber(KEYS[2]), KEYS[3])
         """
-        return self._redis.eval(_script, [smsid, int(time.time())])
+        return self._redis.eval(_script, [smsid, int(time.time()), self.id, self['bid']])
 
     def smsing(self, pdu):
         # Called by ChipMo 2001:4002
@@ -505,6 +509,7 @@ class Chip(RedisHash):
         #     if atk ~= '' then redis.call('rpush', 'System:Smsing', atk..KEYS[1]) end
         #     return ses
         # """
+        print '----', repr([smsid, self.id, self['cdid'], self['bid'], sms['number'], fnum, inum, loc, msg, tim, now])
         _script = """
             redis.call('hmset', 'Sms:'..KEYS[1]..':info', 'id', KEYS[1], 'cpid', KEYS[2], 'cdid', KEYS[3], 'bid', KEYS[4], 'oth', KEYS[5], 'fnum', KEYS[6], 'inum', KEYS[7], 'loc', KEYS[8], 'msg', KEYS[9], 'st', KEYS[10], 'ed', KEYS[11])
             redis.call('rpush', 'System:Sms', KEYS[1])
@@ -515,7 +520,7 @@ class Chip(RedisHash):
             for k, v in pairs(ids) do
                 n = redis.call('hget', 'User:'..v..':info', 'atkname')
                 if n then an = an..n..',' end
-                redis.call('zremrangebyscore', 'User:'..v..':news', 0, KEYS[10] - 5*60)
+                redis.call('zremrangebyscore', 'User:'..v..':news', 0, tonumber(KEYS[11]) - 5*60)
                 for p,q in pairs(redis.call('zrange', 'User:'..v..':news', 0, -1)) do
                     table.insert(ses, {q,redis.call('hget', 'Session:'..q..':info', 'chn')})
                 end
@@ -524,6 +529,7 @@ class Chip(RedisHash):
             return ses
         """
         d = self._redis.eval(_script, [smsid, self.id, self['cdid'], self['bid'], sms['number'], fnum, inum, loc, msg, tim, now ])
+        d.addCallback(lambda sa: self._debug_(sa))
         d.addCallback(lambda sa: (sa, [sms['number'], sms['text'], tim, inum, smsid]))
         return d
 
@@ -574,6 +580,23 @@ class Chip(RedisHash):
 
         if self['mod'] == 'SI3050': oth = oth.replace('+86', '')# + "#"
         return (self, oth)
+
+    # @classmethod
+    # def findById(self, id):
+    #     if not id: return None
+    #     _script = """
+    #         local bid = redis.call('hget', 'Chip:'..KEYS[1]..':info', 'bid')
+    #         redis.call('zadd', 'Box:'..bid..':Chips', KEYS[2], KEYS[1])
+    #         return redis.call('hgetall', 'Chip:'..KEYS[1]..':info')
+    #     """
+    #     d = self._redis.eval(_script, [id, int(time.time())])
+    #     # d = self._redis.hgetall("%s:%s:info"%(self.__name__, id))
+    #     print '-----'
+    #     d.addCallback(lambda hs: dict(zip(hs[::2], hs[1::2])))
+    #     d.addCallback(lambda hs: self._debug_(hs))
+    #     d.addCallback(lambda hs: self(id, hs) if len(hs) > 0 else None)
+    #     return d
+
 
 class Box(RedisHash):
     # Box Model inherit from RedisHash
