@@ -4,7 +4,7 @@
 # Contact: alan@sinosims.com
 
 from simcore.core.shp import SHProtocol, SHPFactory, routeCode
-from simcore.core.models import User, Chip, Box, Call
+from simcore.core.models import User, Chip, Box, Call, Sms
 import time, re
 
 class BoxMo(SHProtocol):
@@ -23,7 +23,6 @@ class ChipMo(SHProtocol):
     @routeCode(101)
     def doAuth(self, tpack):
         # -*- TODO -*- : Use RSA encrypt package body
-
         d = self._session.save({ 'bid' : tpack.body[1], 'rol' :  '10' })
         d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
         return d
@@ -32,12 +31,19 @@ class ChipMo(SHProtocol):
     def doLogin(self, tpack):
         # -*- TODO -*- : Use RSA encrypt package body
 
-        (imsi, imei, bid) = tpack.body[0].split('\n')
-        c = self.setMo(Chip(imsi))
-        d = c.save({ 'cid' : c.id, 'imei' : imei, 'bid' : bid, 'sid' : self._session.id, 'chn' : self.factory.channel })
-        d.addCallback(lambda x: self._session.update({ self._moClass.__name__ : c.id }))
-        d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
+        (mod, imei, imsi, iccid, bid, lvl) = tpack.body
+        lvl = lvl.replace('/dev/', '').replace('/', '_')
+        c = self.setMo(Chip(imei))
+        d = c.login(imsi, bid, self._session, self.factory.channel, mod, iccid, lvl)
+        d.addCallback(lambda ses: self.sendNews(ses, 4003, { 'cpid' : self._mo.id } ))
+        # d.addCallback(lambda x: self.returnDPack(200, [tpack.body[0], ''], tpack.id))
+        d.addCallback(lambda at: self.cnum(tpack, at))
         return d
+
+    def cnum(self, tpack, at):
+        self.returnDPack(200, [tpack.body[0], ''], tpack.id)
+        if at == 0 and self._mo['mod'] != 'SI3050':
+            self.sendTPack(1001, [self._mo.id, 6, '0', 0x00, 5, 'AT+<6>\r', 'CNUM'])
 
     @routeCode(1001)
     def recvATcmd(self, dpack):
@@ -54,30 +60,37 @@ class ChipMo(SHProtocol):
         #       cmd 9 :     Calling status return command
         #   see Wiki for more: http://192.168.6.66/projects/sim/wiki/AT%E5%91%BD%E4%BB%A4%E5%8D%8F%E8%AE%AE
 
-        if self._mo == None: raise Exception(401)
-        d = User.findById(dpack._PPack.senderId)
+        if not self._mo: raise Exception(401)
+        d = None
         if dpack._TPack.body[1] == 1:
-            d.addCallback(lambda u: self._mo.startCall(dpack._TPack.body[2], u.id, dpack._TPack.body[6], 0))
+            if dpack.body[1] == 0:
+                d = self._mo.startCall(dpack._TPack.body[2], dpack._PPack.senderId)
+                d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
+            else:
+                self.returnToUser(dpack, dpack.apiRet, { 'stt' : -1 })
         elif dpack._TPack.body[1] == 2:
-            d.addCallback(lambda u: self._mo.endCall(dpack._TPack.body[2]))
+            d = self._mo.endCall()
+            if d: d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 0 }))
         elif dpack._TPack.body[1] == 3:
-            d.addCallback(lambda u: self._mo.answerCall(dpack._TPack.body[2], u.id))
-        else:
+            d = self._mo.answerCall(dpack._TPack.body[2], dpack._PPack.senderId)
+            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, { 'stt' : 1 }))
+        elif dpack._TPack.body[1] == 4:
+            d = self._mo.sendSMSOver(dpack._TPack.body[2])
+            d.addCallback(lambda x: self.returnToUser(dpack, dpack.apiRet, None))
+        elif dpack._TPack.body[1] == 6:
             d = None
-        if d: d.addCallback(lambda cl: self.returnToUser(dpack, dpack.apiRet, { 'stt' : cl.get('stt', 0) }))
+            if dpack._TPack.body[6] == 'CNUM':
+                match = re.search('\+CNUM: ".*","([^"]+)"', dpack.body[2])
+                if match:
+                    d = self._mo.setNum(match.group(1))
+            elif dpack._TPack.body[6] == 'VTS':
+                self.returnToUser(dpack, dpack.apiRet, None)
         return d
 
-    @routeCode(1002)
-    def recvQueryCard(self, dpack): return None
-    #     if dpack.apiRet != 200: raise Exception(dpack.apiRet)
-    #     if self._mo.id != dpack.body[0]: raise Exception(603)
-    #     info = { 'sig' : dpack.body[1], 'onl' : dpack.body[2], 'stt' : dpack.body[3], 'set' : dpack.body[4]}
-    #     d = self._mo.update(info)
-    #     d.addCallback(lambda x: [dpack.parentTPack().createDPack(dpack.apiRet, info.update({'cid' : self._mo.id}))])
-    #     return d
-
     @routeCode(1003)
-    def recvOpenAudio(self, dpack): return None
+    def recvOpenAudio(self, dpack): 
+        return self.returnToUser(dpack, dpack.apiRet, { 'srv' : "%s:%d"%(dpack._TPack.body[2], dpack._TPack.body[3]), 'tok' : dpack._TPack.body[4], 'rol' : 0 })
+        # return None
 
     @routeCode(2001)
     def recvATresult(self, tpack):
@@ -95,51 +108,74 @@ class ChipMo(SHProtocol):
         #       '+CLCC: 1,1,4,0,0,"13902658325",129/r/nOK'    :   Ringing
         #       '+CLCC: 1,1,0,0,0,"13902658325",129/r/nOK'    :   Answer connected
         #   see Wiki for more: http://192.168.6.66/projects/sim/wiki/CLCC%E5%91%BD%E4%BB%A4%E8%BF%94%E5%9B%9E
+        #
+        #   tpack.body[2] Calling Sequence id
 
-        # if self._mo.id != tpack.body[0]: raise Exception(603)
+        if not self._mo: raise Exception(401)
+        if self._mo.id != tpack.body[0]: raise Exception(603)
         if tpack.body[1] == 200:
-            clccRst = [ s for s in re.split(',|\s|:', tpack.body[6]) if len(s) > 0 ]
-            if clccRst[0] == 'OK':
-                d = self._mo.endCall(tpack.body[2])
-                d.addCallback(lambda cl: cl.reload())
-                # d.addCallback(lambda cl: User.findById(cl['uid']))
-                d.addCallback(lambda cl: User.findById('0f9c509afcd711e383b700163e0212e4'))
-                d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : tpack.body[2], 'stt' : -1 } ))
-                d.addCallback(lambda x: None)
-            elif clccRst[0] == '+CLCC':
-                if clccRst[3] == '4':
-                    oth = clccRst[6].replace('"', '')
-                    d = self._mo.startCall(tpack.body[2], '', oth, 1)
-                    d.addCallback(lambda x: self._mo.users())
-                    d.addCallback(lambda us: self.notiToUsers(us, 4001, { 'cid' : self._mo.id, 'oth' : oth, 'seq' : tpack.body[2], 'tim' : int(time.time()) } ))
-                    d.addCallback(lambda x: None)
-                elif clccRst[3] == '0':
-                    if clccRst[2] == '0':
-                        d = Call(tpack.body[2]).reload()
-                        d.addCallback(lambda cl: User.findById(cl['uid']))
-                        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : tpack.body[2], 'stt' : 0 } ))
-                        d.addCallback(lambda x: None)
-                    elif clccRst[2] == '1':
-                        d = Call(tpack.body[2]).reload()
-                        d.addCallback(lambda cl: User.findById(cl['uid']))
-                        d.addCallback(lambda u: self.notiToUser(u, 4004, { 'cid' : self._mo.id, 'seq' : tpack.body[2], 'stt' : 0 } ))
-                        d.addCallback(lambda x: None)
-                    else:
-                        d = None
-                else:
-                    d = None
-            else:
-              d = None
+            cb = self.parseCLCC(tpack.body[6])
+            d = cb(tpack.body[2]) if cb else None
+        elif tpack.body[1] == 201:
+            match = re.match('\+CMGL:.*\s+([0-9A-F]*)[\x1a]*\s+', tpack.body[6])
+            if not match: return None
+            d = self._mo.smsing(match.group(1))
+            d.addCallback(lambda sa: self.sendNews(sa[0], 4002, { 'cid' : self._mo.id, 'oth' : sa[1][0], 'msg' : sa[1][1], 'tim' : sa[1][2], 'inum' : sa[1][3], 'smsid' : sa[1][4] }))
         else:
             d = None
         return d
 
     @routeCode(2002)
     def recvCardInfo(self, tpack):
-        return self.returnDPack(200, None, tpack.id)
+        if not self._mo: raise Exception(401)
+        cstt = self._mo.get('stt', 0)
+        d = self._mo.onl(tpack.body)
+        if cstt != tpack.body[2]: d.addCallback(lambda ses: self.sendNews(ses, 4003, { 'cpid' : self._mo.id }))
+        d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
+        return d
+
+    def parseCLCC(self, clcc):
+        typ = 0 if self._mo.get('mod', 'MG2639') == 'MG2639' else 1
+        clccPair = [['^(OK)', '\+CLCC:0,9,(0)', self.endCall],
+                   ['\+CLCC:.,.,4,.,.,"([^"]*)"', '\+CLCC:3,0,0(.*)', self.ringing],
+                   ['\+CLCC:1,.,0,.,.,"([^"]*)"', '\+CLCC:1,0,0(.*)', self.changeCall]]
+        for pr in clccPair:
+            match = re.match(pr[typ], re.sub('\s', '', clcc))
+            if match: return pr[2]
+        return None
+
+    def ringing(self, seq):
+        d = self._mo.ringing(seq)
+        if not d: return None
+        d.addCallback(lambda sa: self.sendNews(sa[0], 4001, { 'cid' : self._mo.id, 'oth' : sa[1], 'seq' : seq, 'loc' : sa[2], 'tim' : int(time.time()) } ))
+        d.addCallback(lambda x: None)
+        return d
+
+    def changeCall(self, seq):
+        d = self._mo.changeCall()
+        if not d: return None
+        d.addCallback(lambda sa: self.sendNews(sa[0], 4004, { 'cid' : self._mo.id, 'seq' : seq, 'stt' : 0 } ))
+        d.addCallback(lambda x: None)
+        return d
+
+    def endCall(self, seq):
+        d = self._mo.endCall()
+        if not d: return None
+        d.addCallback(lambda sa: self.sendNews(sa[0], 4004, { 'cid' : self._mo.id, 'seq' : sa[1], 'stt' : -1 } ))
+        d.addCallback(lambda x: None)
+        return d
 
     def returnToUser(self, dpack, rt, body):
         self.passToSck(dpack._PPack.senderChannel, dpack._PPack.senderSid, dpack._PPack.packId, 0x80, rt, body)
+
+    def connectionLost(self, reason):
+        if self._mo:
+            d = Box(self._mo['bid']).delChip(self._mo.id)
+            d.addCallback(lambda ses: self.sendNews(ses, 4003, { 'cpid' : self._mo.id }))
+            d.addCallback(lambda x: SHProtocol.connectionLost(self, reason))
+        else:
+            d = SHProtocol.connectionLost(self, reason)
+        return d
 
     # def errorRoutePack(self, failure, tpack):
     #     raise failure

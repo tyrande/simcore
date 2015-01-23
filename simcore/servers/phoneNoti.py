@@ -13,19 +13,16 @@ class PhoneNoti(SHProtocol):
     @routeCode(401)
     def doNews(self, tpack):
         if not self._mo: raise Exception(401)
-        d = self._session.save({ 'chn' : self.factory.channel })
-        d.addCallback(lambda x: self._mo.addNewsSession(self._session.id))
-        d.addCallback(lambda x: self._mo.chips())
-        d.addCallback(lambda cps: Call.findAllByIds([ c.get('cll', '') for c in cps]))
-        d.addCallback(lambda cs: self.returnDPack(200, [{'cid' : c['cpid'], 'oth' : c['oth'], 'seq' : c['id'], 'tim' : v['st']} for c in cs if (c.get('uid', '') == 'None' and time.time() - v['st'] < 60) ], tpack.id))
+        # if tpack.body and tpack.body[0][0] == '1': raise Exception(407)
+        d = self._mo.newsHeart(self._session, self.factory.channel, tpack.body)
+        d.addCallback(lambda cs: self.returnDPack(200 if self.isNewVersion(cs[0], tpack.body[0].split('.')) else 201, cs[1], tpack.id))
         return d
 
-    @routeCode(402)
-    def doPushNews(self, tpack):
-        if not self._mo: raise Exception(401)
-        d = self._mo.save({ 'atk' : tpack.body[0]})
-        d.addCallback(lambda x: self.returnDPack(200, [], tpack.id))
-        return d
+    def isNewVersion(self, needv, curv):
+        for i in [0, 1, 2]:
+            if curv[i] == needv[i]: continue
+            return  False if int(curv[i]) < int(needv[i]) else True
+        return True
 
     @routeCode(4001)
     def recvRing(self, dpack): return None

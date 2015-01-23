@@ -9,7 +9,6 @@ from simcore.core.database import SrPushdb
 from simcore.core.gol import Gol
 from simcore.core.models import Session
 import simcore.libs.txredisapi as redis
-from apns import APNs, Payload
 import struct, msgpack, uuid, time, random
 
 class PackBase(object):
@@ -38,6 +37,10 @@ class PackBase(object):
         self.routeCode = None
         self._TPack = None
         self._PPack = None
+
+    def length(self):
+        sidLen = 0 if self.sid == '' else len(uuid.UUID(hex=self.sid).bytes)
+        return self._headerLen + sidLen + len(msgpack.packb(self.body) if self.body != None else "")
 
 class TPack(PackBase):
     # Request Package inherit from PackBase
@@ -87,7 +90,7 @@ class PPack(object):
         return msgpack.packb([self.receiverSckId, self.senderId, self.senderCls, self.senderChannel, self.senderSid, self.packId, self.flag, self.apiRet, self.body])
 
     def __repr__(self):
-        return repr([self.receiverSckId, self.senderId, self.senderCls, self.senderChannel, self.senderSid, self.packId, self.flag, self.apiRet, self.body])
+        return repr({'receiverSckId' : self.receiverSckId, 'sendId' : self.senderId, 'senderCls' : self.senderCls, 'senderChannel' : self.senderChannel, 'senderSid' :  self.senderSid, 'packId' : self.packId, 'flag' : self.flag, 'apiRet' : self.apiRet, 'body' : self.body})
 
     @classmethod
     def loads(self, str):
@@ -97,7 +100,7 @@ def routeCode(code):
     # Decorator for route code and route api
     
     def decorator(callback):
-        Gol().addRoute(code, callback)
+        Gol().addRoute(callback.__module__.replace('simcore.servers.', ''), code, callback)
         return callback
     return decorator
 
@@ -112,42 +115,47 @@ class SHProtocol(protocol.Protocol):
     #   @attr _pckId:           Use to generate new TPack id, start from 1000 because Phone and Card generate TPack id from 1
     
     _redis = SrPushdb().redisPool
+    _heart = 5*60
 
-    def connectionMade(self):
-        # -*- Debug -*-
-        Gol()._logPack_('CM', self, None, '>> %s'%self.__class__.__name__)
-
+    def __init__(self):
         self._recvBuf = ''
         self._pckId = 1000 + random.randint(0, 5000)
         self._session = None
         self._mo = None
         self._TPackWaitPeer = {}
+        self._lastRecvAt = time.time()
+
+    def connectionMade(self):
+        Gol()._log_('CM', self, None, '>> %s'%self.__class__.__name__) # -*- Log -*- #
+        reactor.callLater(self._heart, self.closeConnection)
 
     def connectionLost(self, reason):
-        if self._session: Gol().delSck(self._session.id, self.factory._sckType)
-
-        # -*- Debug -*-
-        Gol()._logPack_('CL', self, None, '<< %s'%self.__class__.__name__)
-
+        Gol()._log_('CL', self, None, '<< %s'%self.__class__.__name__) # -*- Log -*- #
+        return Gol().delSck(self._session.id, self.factory._sckType) if self._session else defer.Deferred()
+        
     def dataReceived(self, data):
         self._recvBuf += data
-        while len(self._recvBuf) > 4:
+        bufLen = len(self._recvBuf)
+        while bufLen > 4:
             self._recvBuf, pack = packLoads(self._recvBuf)
             if pack: self.recvPack(pack)
+            if len(self._recvBuf) == bufLen: break
+            bufLen = len(self._recvBuf)
 
     def recvPack(self, pack):
+        if Gol().stop: return
+        self._lastRecvAt = time.time()
         if type(pack) == DPack:
             tp = self.findWaitingTPack(pack.id)
             if tp: pack.peerToTPack(tp)
-            else: self.errorRoutePack(500, pack)
+            # else: self.errorRoutePack(500, pack)
+            else: raise Exception(400) 
         
-        # -*- Debug -*-
-        Gol()._logPack_('FR', self, pack)
-
+        Gol()._log_('FR', self, pack) # -*- Log -*- #
         d = defer.Deferred()
         d.addCallback(self.loadSession)
         d.addCallback(self.loadMo)
-        d.addCallback(lambda x: Gol().route(pack.routeCode)(self, pack))
+        d.addCallback(lambda x: Gol().route(self.__class__.__name__, pack.routeCode)(self, pack))
         d.addCallbacks(self.finishRoutePack, lambda x: self.errorRoutePack(x, pack))
         d.callback(pack)
 
@@ -157,9 +165,6 @@ class SHProtocol(protocol.Protocol):
         #   @param senderCls:       Sender socket mo class
         #   @param senderChannel:   Sender socket factory channel
         
-        # -*- Debug -*-
-        # Gol()._logPack_('PP', self, None, "[%s %s %s:%s:%s RC %s:%s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, senderChannel, senderCls, senderId, pack.routeCode))
-
         if ppack.flag == 0x00:
             pack = TPack(self.newPackId(), ppack.apiRet, self._session.id, ppack.body)
             pack.peerToPPack(ppack)
@@ -167,17 +172,6 @@ class SHProtocol(protocol.Protocol):
             self.send(pack)
         else:
             self.returnDPack(ppack.apiRet, ppack.body, ppack.packId)
-
-        # if type(pack) == TPack:
-        #     pack.setMo(senderId, senderCls, senderChannel)
-        #     if parentTPack:
-        #         pack.peerToTPack(parentTPack)
-
-        #     self.addTPackWaiting(pack)
-        #     return self.send(pack)
-        #     return Gol().route(pack.routeCode)(self, pack)
-        # else:
-        #     return self.send(pack)
 
     def loadSession(self, pack):
         # Load Session by received package sid
@@ -195,6 +189,7 @@ class SHProtocol(protocol.Protocol):
         return d
 
     def setSession(self, s):
+        if not s: raise Exception(403)
         self._session = s
         return s
 
@@ -203,6 +198,7 @@ class SHProtocol(protocol.Protocol):
         #   If there has no current session:       Nothing to load
         #   Else:                                  Find Mo by Mo class and Mo id which store in session
 
+        if self._mo: return None
         if not self._session: return None
         _moid = self._session.get(self._moClass.__name__, None)
         if not _moid: return None
@@ -215,15 +211,18 @@ class SHProtocol(protocol.Protocol):
         return mo
 
     def send(self, pack):
-        # -*- Debug -*-
-        Gol()._logPack_('TO', self, pack)
-
+        Gol()._log_('TO', self, pack) # -*- Log -*- #
         self.transport.write(pack.dump())
         return pack
 
     def newPackId(self):
         self._pckId = (self._pckId + 1)%50000
         return self._pckId
+
+    def sendTPack(self, rt, body):
+        pack = TPack(self.newPackId(), rt, self._session.id, body)
+        self.addTPackWaiting(pack)
+        return self.send(pack)
 
     def returnDPack(self, rt, body, tpid):
         # Respond package through current socket
@@ -235,9 +234,6 @@ class SHProtocol(protocol.Protocol):
         return self.send(pack)
 
     def passToSck(self, channel, SckId, packId, flag, apiRet, body):
-        # -*- Debug -*-
-        # Simhub()._logPack_('PT', self, None, "[%s %s %s:%s:%s To %s:%s] %s"%(pack.__class__.__name__.replace('ack', ''), pack.id, self.factory.channel, self._mo.__class__.__name__, self._mo.id, channel, sid, pack.routeCode))
-
         ppack = PPack([SckId, self._mo.id, self._mo.__class__.__name__, self.factory.channel, self._session.id, packId, flag, apiRet, body])
         if channel == self.factory.channel and False:
             sck = self.findSck(SckId)
@@ -245,58 +241,59 @@ class SHProtocol(protocol.Protocol):
                 return sck.processPPack(ppack)
         else:
             return self._redis.publish(channel, ppack.dump())
-
-    def notiToUsers(self, us, rc, body):
-        [ self.notiToUser(u, rc, body) for u in us ]
-
-    def notiToUser(self, u, rc, body):
-        # Push notice through user's news socket
-        #   If user's phone system is iOS, also push notice through Apple's notice channel
-        #   -*- TODO -*- : 1. Support user has mutiple devices
-        #                  2. When push through socket fail, use the Apple way
-
-        d = u.newsSessions()
-        d.addCallback(lambda ses: self.pp(ses))
-        d.addCallback(lambda ses: [ self.passToSck(s['chn'], s.id + 'news', '', 0x00, rc, body) for s in ses ])
-        if u.get('rol', None) == '20' and u.get('atk', None):
-            d.addCallback(lambda x: self.sendNotiToApple(u['atk'], 'Calling...'))
-        return d
-
-    def pp(self, s):
-        print '---ses--', repr(s)
-        return s
-
-    def sendNotiToApple(self, pushTok, note):
-        payload = Payload(alert=note, sound="default", badge=1)
-        self.factory._apns.gateway_server.send_notification(pushTok, payload)
+            
+    def sendNews(self, sess, rc, body):
+        _ss = {}
+        [ _ss.update({s[0] : s[1]}) for s in sess ]
+        for sid, chn in _ss.items():
+            self.passToSck(chn, sid + 'news', -1, 0x00, rc, body)
 
     def finishRoutePack(self, pack):
         pass
 
     def errorRoutePack(self, failure, tpack):
-        raise failure
-        print 'error Route', failure
-        self.returnDPack(int(failure.getErrorMessage()), None)
+        # if Gol().env == 'test':
+            # raise failure
+        try:
+            self.returnDPack(int(failure.getErrorMessage()), None, tpack.id)
+        except Exception, e:
+            Gol()._log_('MS', self, None, repr(failure.getBriefTraceback().replace('\n', ' ')))
 
     def addTPackWaiting(self, pack):
+        # Waiting DPack Timeout 30 seconds
+        
         self._TPackWaitPeer[pack.id] = pack
+        reactor.callLater(30, self.waitingTPackTimeout, pack.id)
 
     def findWaitingTPack(self, packid):
         tp = self._TPackWaitPeer.get(packid, None)
-        if tp: del self._TPackWaitPeer[packid]
+        if tp: 
+            del self._TPackWaitPeer[packid]
         return tp
+
+    def waitingTPackTimeout(self, packid):
+        tp = self.findWaitingTPack(packid)
+        if tp and tp._PPack and tp._PPack.packId > 0:
+            self.passToSck(tp._PPack.senderChannel, tp._PPack.senderSid, tp._PPack.packId, 0x80, 721, None)
 
     def findSck(self, SckId):
         return Gol().findSck(SckId)
 
+    def closeConnection(self, force=False):
+        if force or (time.time() - self._lastRecvAt > self._heart):
+            self.transport.loseConnection()
+        else:
+            reactor.callLater(self._heart, self.closeConnection)
+
+    def _debug_(self, obj, msg=''):
+        print '---- %s ----'%msg, repr(obj)
+        return obj
 
 class SHPFactory(protocol.Factory):
     # Factory class to create SHProtocol socket
-    # @attr _apns:      For pushing Apple notice
     # @attr _sckType:   Commend socket should be '', News socket should be 'news'
     # @attr channel:    Current server id, use to subscribe Redis Pub&Sub system
 
-    _apns = APNs(use_sandbox=True, cert_file='ca/aps_development.pem', key_file='ca/simhub_nopass.pem')
     _sckType = ''
 
     def __init__(self, channel):
@@ -320,7 +317,7 @@ class RedisSub(redis.SubscriberProtocol):
         ppack = PPack.loads(message)
         sck = self.findSck(ppack.receiverSckId)
         if sck:
-            sck.processPPack(ppack)
+            sck.processPPack(ppack) 
 
     def findSck(self, sid, sckType=''):
         return Gol().findSck(sid, sckType)

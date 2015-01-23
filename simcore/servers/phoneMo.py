@@ -6,75 +6,18 @@
 from simcore.core.shp import SHProtocol, SHPFactory, routeCode
 from simcore.core.gol import Gol
 from simcore.core.models import User
-import time, uuid
+import time, uuid, random
 
 class PhoneMo(SHProtocol):
     _moClass = User
 
-    @routeCode(201)
-    def doAuth(self, tpack):
-        # -*- TODO -*- : Use RSA encrypt package body
-
-        d = self._session.save({ 'rol' : tpack.body[1] })
-        d.addCallback(lambda x: self.returnDPack(200, ['asdf'*4, 'x'*12], tpack.id))
-        return d
-
-    @routeCode(202)
-    def doLogin(self, tpack):
-        # -*- TODO -*- : Use RSA encrypt package body
-
-        (login, pwd, imei) = tpack.body[0].split('\n')
-        # d = User.findAndCheckByLogin(login, pwd)
-        # d.addCallback(lambda u: self.setUserToSession(u, imei))
-        d = self._session.save({ self._moClass.__name__ : '0f9c509afcd711e383b700163e0212e4', 'imei' : imei })
-        d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
-        return d
-
-    @routeCode(203)
-    def doRegister(self, tpack):
-        # -*- TODO -*- : Use RSA encrypt package body
-
-        (login, pwd, imei) = tpack.body[0].split('\n')
-        # d = User.create(login, pwd)
-        # d.addCallback(lambda u: self.setUserToSession(u, imei))
-        d = self._session.save({ self._moClass.__name__ : '0f9c509afcd711e383b700163e0212e4', 'imei' : imei })
-        d.addCallback(lambda x: self.returnDPack(200, None, tpack.id))
-        return d
-
-    # def setUserToSession(self, u, imei):
-    #     # Set User to current Session
-    #     #   Use for doLogin and doRegister, accept defer param
-    #     #   @param u:       User which pass the password auth
-    #     #   @param imei:    User's UDID of the Device
-
-    #     self.setMo(u)
-    #     d = u.save({ 'imei' : imei, 'rol' : self._session['rol'], 'sid' : self._session.id, 'chn' : self.factory.channel })
-    #     d.addCallback(lambda u: self._session.save({ self._moClass.__name__ : u.id, 'imei' : imei }))
-    #     return d
-
-    @routeCode(3001)
-    def doListCard(self, tpack):
-        if self._mo == None: raise Exception(401)
-        d = self._mo.chips()
-        d.addCallback(lambda cps: self.returnDPack(200, [ { 'cid' : c.id, 'cno' : c.get('cno', ''), 'sig' : c.get('sig', 0), 'onl' : c.get('onl', 0) } for c in cps], tpack.id))
-        return d
-
-    @routeCode(3002)
-    def doGetCard(self, tpack): return None
-    #     if self._mo == None: raise Exception(401)
-    #     d = self._mo.card(tpack.body['cid'])
-    #     d.addCallback(lambda c: c.getCard(tpack))
-    #     return d
-
-    @routeCode(3003)
-    def doAddCard(self, tpack):
-        d = self._mo.addCard(tpack)
-        d.addCallback(lambda x: tpack.createDPack(200, None))
-        return d
-
     @routeCode(3301)
     def doDial(self, tpack):
-        self.sendATcmd(tpack, [tpack.body['cid'], 1, tpack.body['seq'], 0x00, 5, "ATD<6>;\r", tpack.body['oth']])
+        if not self._mo: raise Exception(401)
+        d = self._mo.chip(tpack.body['cid'])
+        d.addCallback(lambda c: c.fineOth(tpack.body['oth']))
+        d.addCallback(lambda co: self.sendToChip(co[0], 1001, [tpack.body['cid'], 1, tpack.body['seq'], 0x00, 5, "ATD<6>;\r", co[1]], tpack.id))
+        return d
 
     @routeCode(3302)
     def doHangup(self, tpack):
@@ -84,9 +27,16 @@ class PhoneMo(SHProtocol):
     def doAnswer(self, tpack):
         self.sendATcmd(tpack, [tpack.body['cid'], 3, tpack.body['seq'], 0x00, 5, "ATA\r"])
 
+    @routeCode(3401)
+    def doSendSMS(self, tpack):
+        if not self._mo: raise Exception(401)
+        d = self._mo.sendSMS(tpack.body['cid'], tpack.body['oth'], tpack.body['msg'], tpack.body['mid'])
+        # d.addCallback(lambda cs: self.sendToChip(cs[0], 1001, [cs[0].id, 4, cs[1][0], 0x00, 5, '', 'AT+CMGS=%d\r'%cs[1][1], '%s\x1a'%cs[1][2]], tpack.id))
+        d.addCallback(lambda cs: self.sendToChip(cs[0], 1001, cs[1], tpack.id))
+
     @routeCode(3501)
     def doTalking(self, tpack):
-        if self._mo == None: raise Exception(401)
+        if not self._mo: raise Exception(401)
         tok = uuid.uuid1().hex
         srv = Gol().getVoiceTunnel()
         d = User.findByLogin(tpack.body["oth"])
@@ -96,17 +46,21 @@ class PhoneMo(SHProtocol):
 
     @routeCode(3502)
     def doTalkingToChip(self, tpack):
-        if self._mo == None: raise Exception(401)
-        tok = uuid.uuid1().hex
-        srv = Gol().getCallTunnel()
+        if not self._mo: raise Exception(401)
+        # tok = uuid.uuid1().hex
+        tok, srv = Gol().getCallTunnel()
         host, port = srv.split(':')
         d = self._mo.chip(tpack.body['oth'])
-        d.addCallback(lambda c: self.sendToChip(c, 1003, [ c.id, 1,  host, int(port), '01' + tok ], tpack.id))
-        d.addCallback(lambda x: self.returnDPack(200, { 'srv' : srv, 'tok' : '00' + tok }, tpack.id))
+        d.addCallback(lambda c: self.sendToChip(c, 1003, [ c.id, 1,  host, int(port), tok, 1 ], tpack.id))
+        # d.addCallback(lambda x: self.returnDPack(200, { 'srv' : srv, 'tok' : tok, 'rol' : 0 }, tpack.id))
         return d
 
+    @routeCode(3503)
+    def doDTMF(self, tpack):
+        self.sendATcmd(tpack, [tpack.body['cid'], 6, '0', 0x00, 5, "AT+<6>=%s\r"%tpack.body['chr'], "VTS"])
+
     def sendATcmd(self, tpack, body):
-        if self._mo == None: raise Exception(401)
+        if not self._mo: raise Exception(401)
         d = self._mo.chip(tpack.body['cid'])
         d.addCallback(lambda c: self.sendToChip(c, 1001, body, tpack.id))
         return d

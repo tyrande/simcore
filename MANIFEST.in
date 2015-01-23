@@ -1,1 +1,2 @@
 recursive-include ca *
+recursive-include twisted/plugins simcorePlugins.py

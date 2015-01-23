@@ -1,35 +1,35 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
-from fabric.api import local, cd, run, env
+from fabric.api import local, cd, run, put, env
 
-with open('../pools/production/coreServer.ini') as f:
-    env.hosts = [ s.strip() for s in f.readlines() ]
+env.hosts = [ '114.215.209.188', '115.29.241.227' ]
+# env.hosts = [ '115.29.241.227' ]
+env.user = 'sim'
 env.key_filename = '~/.ssh/id_rsa.pub'
 
-def bootstrap():
-    run('mkdir opt')
-    cd('opt')
-    run('git clone git@deva.sinosims.com:simDCS.git')
-    run('git clone git@deva.sinosims.com:pools.git')
-    cd('simDCS')
-    run('virtualenv --clear env')
-    run('twisted -y run/production.tac')
-
-def pack():
-    local('python setup.py sdist --formats=gztar', capture=False)
-
 def deploy():
-    cd('~/opt/simDCS')
-    run('git pull')
-    # dist = local('python setup.py --fullname', capture=True).strip()
+    local('python setup.py sdist --formats=gztar', capture=False)
+    dist = local('python setup.py --fullname', capture=True).strip()
+    put('dist/%s.tar.gz'%dist, '/home/sim/tmp/simcore.tar.gz')
+    with cd('/home/sim/tmp/'):
+        run('tar zxvf /home/sim/tmp/simcore.tar.gz')
+        with cd('/home/sim/tmp/%s'%dist):
+            run('/home/sim/opt/simenv/bin/python setup.py install --single-version-externally-managed --root=/')
     
-    # put('dist/%s.tar.gz'%dist, '/home/sim/opt/simDCS.tar.gz'%dist)
-    # run('mkdir /')
+    run('rm -rf /home/sim/tmp/%s /home/sim/tmp/simcore.tar.gz'%dist)
 
-def hello():
-    print("Hi!")
-    local("ls ~/")
-    with cd('~/opt/'):
-        run('ls')
+# def remote_start():
+#     with cd('/home/sim/opt/simcore'):
+#         run('/home/sim/opt/simenv/bin/twistd simcore --pools=/home/sim/opt/pools/ --env=production --logfile=/home/sim/opt/simcore/logs/simcore.log')
 
+# def remote_stop():
+#     run('kill `cat /home/sim/opt/simcore/twistd.pid`')
+
+# def remote_restart():
+#     remote_stop()
+#     remote_start()
+
+def remote_restart():
+    with cd('/home/sim/opt/simcore'):
+        run('./restart')
